@@ -1,0 +1,33 @@
+# Unreal Engine: contenido generado
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Visual Studio
+.vs/
+*.sln
+*.slnx
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Rider
+.idea/
+
+# Archivos temporales
+*.tmp
+*.log
+*.bak
+*.autosave
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Compilaciones empaquetadas
+Packaged/
+PackagedBuilds/
+StagedBuilds/
