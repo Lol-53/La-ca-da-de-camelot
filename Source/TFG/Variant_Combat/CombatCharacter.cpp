@@ -382,33 +382,32 @@ void ACombatCharacter::RespawnCharacter()
 
 float ACombatCharacter::TakeDamage(float Damage, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
+	float AppliedDamage = 0.0f;
 	// only process damage if the character is still alive
-	if (CurrentHP <= 0.0f)
+	if (CurrentHP > 0.0f)
 	{
-		return 0.0f;
-	}
-
-	// reduce the current HP
-	CurrentHP -= Damage;
+		AppliedDamage = Damage;
+		CurrentHP -= Damage;
 
 	// have we run out of HP?
-	if (CurrentHP <= 0.0f)
-	{
+		if (CurrentHP <= 0.0f)
+		{
 		// die
 		HandleDeath();
-	}
-	else
-	{
+		}
+		else
+		{
 		// update the life bar
 		LifeBarWidget->SetLifePercentage(CurrentHP / MaxHP);
 
 		// enable partial ragdoll physics, but keep the pelvis vertical
 		GetMesh()->SetPhysicsBlendWeight(0.5f);
 		GetMesh()->SetBodySimulatePhysics(PelvisBoneName, false);
+		}
 	}
 
 	// return the received damage amount
-	return Damage;
+	return AppliedDamage;
 }
 
 void ACombatCharacter::Landed(const FHitResult& Hit)

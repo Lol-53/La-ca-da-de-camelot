@@ -209,22 +209,18 @@ void ASideScrollingCharacter::MultiJump()
 	if (DropValue > 0.0f)
 	{
 		CheckForSoftCollision();
-		return;
 	}
-
-	// reset the drop value
-	DropValue = 0.0f;
-
-	// if we're grounded, disregard advanced jump logic
-	if (!GetCharacterMovement()->IsFalling())
+	else if (!GetCharacterMovement()->IsFalling())
 	{
+		DropValue = 0.0f;
 		Jump();
-		return;
 	}
-
-	// if we have a horizontal input, try for wall jump first
-	if (!bHasWallJumped && !FMath::IsNearlyZero(ActionValueY))
+	else
 	{
+		DropValue = 0.0f;
+		bool bWallJumpPerformed = false;
+		if (!bHasWallJumped && !FMath::IsNearlyZero(ActionValueY))
+		{
 		// trace ahead of the character for walls
 		FHitResult OutHit;
 
@@ -255,12 +251,12 @@ void ASideScrollingCharacter::MultiJump()
 			// schedule wall jump lockout reset
 			GetWorld()->GetTimerManager().SetTimer(WallJumpTimer, this, &ASideScrollingCharacter::ResetWallJump, DelayBetweenWallJumps, false);
 
-			return;
+			bWallJumpPerformed = true;
+			}
 		}
-	}
 
 	// test for double jump only if we haven't already tested for wall jump
-	if (!bHasWallJumped)
+		if (!bWallJumpPerformed && !bHasWallJumped)
 	{
 		// The movement component handles double jump but we still need to manage the flag for animation
 		if (!bHasDoubleJumped)
@@ -272,6 +268,7 @@ void ASideScrollingCharacter::MultiJump()
 			Jump();
 		}
 	}
+}
 }
 
 void ASideScrollingCharacter::CheckForSoftCollision()

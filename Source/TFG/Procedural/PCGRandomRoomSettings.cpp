@@ -117,15 +117,15 @@ namespace ProceduralRoom
 	static double ReadNumber(const UObject* Object, const FName Name, const double Fallback)
 	{
 		const FNumericProperty* Property = CastField<FNumericProperty>(FindProperty(Object, Name));
-		if (!Property)
+		double Result = Fallback;
+		if (Property)
 		{
-			return Fallback;
+			const void* Value = Property->ContainerPtrToValuePtr<void>(Object);
+			Result = Property->IsFloatingPoint()
+				? Property->GetFloatingPointPropertyValue(Value)
+				: static_cast<double>(Property->GetSignedIntPropertyValue(Value));
 		}
-
-		const void* Value = Property->ContainerPtrToValuePtr<void>(Object);
-		return Property->IsFloatingPoint()
-			? Property->GetFloatingPointPropertyValue(Value)
-			: static_cast<double>(Property->GetSignedIntPropertyValue(Value));
+		return Result;
 	}
 
 	static bool ReadBool(const UObject* Object, const FName Name, const bool Fallback)
@@ -137,58 +137,55 @@ namespace ProceduralRoom
 	static int32 ReadArrayLength(const UObject* Object, const FName Name)
 	{
 		const FArrayProperty* Property = CastField<FArrayProperty>(FindProperty(Object, Name));
-		if (!Property)
+		int32 Length = 0;
+		if (Property)
 		{
-			return 0;
+			const void* ArrayValue = Property->ContainerPtrToValuePtr<void>(Object);
+			FScriptArrayHelper ArrayHelper(Property, ArrayValue);
+			Length = ArrayHelper.Num();
 		}
-
-		const void* ArrayValue = Property->ContainerPtrToValuePtr<void>(Object);
-		FScriptArrayHelper ArrayHelper(Property, ArrayValue);
-		return ArrayHelper.Num();
+		return Length;
 	}
 
 	static bool WriteInteger(UObject* Object, const FName Name, const int64 Value)
 	{
 		FNumericProperty* Property = CastField<FNumericProperty>(FindProperty(Object, Name));
-		if (!Property || Property->IsFloatingPoint())
+		const bool bCanWrite = Property && !Property->IsFloatingPoint();
+		if (bCanWrite)
 		{
-			return false;
+			Property->SetIntPropertyValue(Property->ContainerPtrToValuePtr<void>(Object), Value);
 		}
-
-		Property->SetIntPropertyValue(Property->ContainerPtrToValuePtr<void>(Object), Value);
-		return true;
+		return bCanWrite;
 	}
 
 	static bool WriteBool(UObject* Object, const FName Name, const bool Value)
 	{
 		FBoolProperty* Property = CastField<FBoolProperty>(FindProperty(Object, Name));
-		if (!Property)
+		const bool bCanWrite = Property != nullptr;
+		if (bCanWrite)
 		{
-			return false;
+			Property->SetPropertyValue_InContainer(Object, Value);
 		}
-
-		Property->SetPropertyValue_InContainer(Object, Value);
-		return true;
+		return bCanWrite;
 	}
 
 	static bool WriteNumber(UObject* Object, const FName Name, const double Value)
 	{
 		FNumericProperty* Property = CastField<FNumericProperty>(FindProperty(Object, Name));
-		if (!Property)
+		const bool bCanWrite = Property != nullptr;
+		if (bCanWrite)
 		{
-			return false;
+			void* Destination = Property->ContainerPtrToValuePtr<void>(Object);
+			if (Property->IsFloatingPoint())
+			{
+				Property->SetFloatingPointPropertyValue(Destination, Value);
+			}
+			else
+			{
+				Property->SetIntPropertyValue(Destination, FMath::RoundToInt64(Value));
+			}
 		}
-
-		void* Destination = Property->ContainerPtrToValuePtr<void>(Object);
-		if (Property->IsFloatingPoint())
-		{
-			Property->SetFloatingPointPropertyValue(Destination, Value);
-		}
-		else
-		{
-			Property->SetIntPropertyValue(Destination, FMath::RoundToInt64(Value));
-		}
-		return true;
+		return bCanWrite;
 	}
 
 	struct FGeneratedDecorationCounts
@@ -220,25 +217,20 @@ namespace ProceduralRoom
 		const FName BaseName,
 		const FTransform& RelativeTransform)
 	{
-		if (!IsValid(RoomActor) || !RoomActor->GetRootComponent())
+		USceneComponent* Anchor = IsValid(RoomActor) && RoomActor->GetRootComponent()
+			? NewObject<USceneComponent>(
+				RoomActor,
+				MakeUniqueObjectName(RoomActor, USceneComponent::StaticClass(), BaseName))
+			: nullptr;
+		if (Anchor)
 		{
-			return nullptr;
+			Anchor->ComponentTags.AddUnique(ProceduralDecorationComponentTag);
+			RoomActor->AddInstanceComponent(Anchor);
+			Anchor->SetupAttachment(RoomActor->GetRootComponent());
+			Anchor->SetMobility(EComponentMobility::Movable);
+			Anchor->RegisterComponent();
+			Anchor->SetRelativeTransform(RelativeTransform);
 		}
-
-		USceneComponent* Anchor = NewObject<USceneComponent>(
-			RoomActor,
-			MakeUniqueObjectName(RoomActor, USceneComponent::StaticClass(), BaseName));
-		if (!Anchor)
-		{
-			return nullptr;
-		}
-
-		Anchor->ComponentTags.AddUnique(ProceduralDecorationComponentTag);
-		RoomActor->AddInstanceComponent(Anchor);
-		Anchor->SetupAttachment(RoomActor->GetRootComponent());
-		Anchor->SetMobility(EComponentMobility::Movable);
-		Anchor->RegisterComponent();
-		Anchor->SetRelativeTransform(RelativeTransform);
 		return Anchor;
 	}
 
@@ -250,19 +242,13 @@ namespace ProceduralRoom
 		const FTransform& RelativeTransform,
 		const bool bCollision)
 	{
-		if (!IsValid(RoomActor) || !IsValid(Parent) || !IsValid(Mesh))
+		UStaticMeshComponent* MeshComponent = IsValid(RoomActor) && IsValid(Parent) && IsValid(Mesh)
+			? NewObject<UStaticMeshComponent>(
+				RoomActor,
+				MakeUniqueObjectName(RoomActor, UStaticMeshComponent::StaticClass(), BaseName))
+			: nullptr;
+		if (MeshComponent)
 		{
-			return nullptr;
-		}
-
-		UStaticMeshComponent* MeshComponent = NewObject<UStaticMeshComponent>(
-			RoomActor,
-			MakeUniqueObjectName(RoomActor, UStaticMeshComponent::StaticClass(), BaseName));
-		if (!MeshComponent)
-		{
-			return nullptr;
-		}
-
 		MeshComponent->ComponentTags.AddUnique(ProceduralDecorationComponentTag);
 		RoomActor->AddInstanceComponent(MeshComponent);
 		MeshComponent->SetupAttachment(Parent);
@@ -279,6 +265,7 @@ namespace ProceduralRoom
 		MeshComponent->SetCastShadow(true);
 		MeshComponent->RegisterComponent();
 		MeshComponent->SetRelativeTransform(RelativeTransform);
+		}
 		return MeshComponent;
 	}
 
@@ -288,23 +275,17 @@ namespace ProceduralRoom
 		const FName BaseName,
 		const bool bCollision = true)
 	{
-		if (!IsValid(RoomActor) || !RoomActor->GetRootComponent() || !IsValid(Mesh))
-		{
-			return nullptr;
-		}
-
 		UHierarchicalInstancedStaticMeshComponent* Instancer =
-			NewObject<UHierarchicalInstancedStaticMeshComponent>(
+			IsValid(RoomActor) && RoomActor->GetRootComponent() && IsValid(Mesh)
+			? NewObject<UHierarchicalInstancedStaticMeshComponent>(
 				RoomActor,
 				MakeUniqueObjectName(
 					RoomActor,
 					UHierarchicalInstancedStaticMeshComponent::StaticClass(),
-					BaseName));
-		if (!Instancer)
+					BaseName))
+			: nullptr;
+		if (Instancer)
 		{
-			return nullptr;
-		}
-
 		Instancer->ComponentTags.AddUnique(ProceduralDecorationComponentTag);
 		RoomActor->AddInstanceComponent(Instancer);
 		Instancer->SetupAttachment(RoomActor->GetRootComponent());
@@ -325,133 +306,119 @@ namespace ProceduralRoom
 		// crosses the ceiling and illuminates the room as if it were translucent.
 		Instancer->bCastShadowAsTwoSided = true;
 		Instancer->RegisterComponent();
+		}
 		return Instancer;
 	}
 
 	static bool CreateGeneratedWallJointSeals(AActor* RoomActor)
 	{
-		if (!IsValid(RoomActor) || !RoomActor->GetRootComponent())
+		bool bSealsAvailable = false;
+		const bool bRoomValid = IsValid(RoomActor) && RoomActor->GetRootComponent();
+		if (bRoomValid)
 		{
-			return false;
-		}
-
-		TInlineComponentArray<UActorComponent*> ExistingComponents(RoomActor);
-		for (UActorComponent* ExistingComponent : ExistingComponents)
-		{
-			if (IsValid(ExistingComponent) &&
-				ExistingComponent->GetName().StartsWith(
-					TEXT("ProceduralWallJointSeals")))
+			TInlineComponentArray<UActorComponent*> ExistingComponents(RoomActor);
+			int32 ExistingIndex = 0;
+			while (ExistingIndex < ExistingComponents.Num() && !bSealsAvailable)
 			{
-				return true;
+				UActorComponent* ExistingComponent = ExistingComponents[ExistingIndex];
+				bSealsAvailable = IsValid(ExistingComponent) &&
+					ExistingComponent->GetName().StartsWith(TEXT("ProceduralWallJointSeals"));
+				++ExistingIndex;
 			}
 		}
 
 		UInstancedStaticMeshComponent* WallInstancer = nullptr;
-		TInlineComponentArray<UInstancedStaticMeshComponent*> Instancers(RoomActor);
-		for (UInstancedStaticMeshComponent* Instancer : Instancers)
+		if (bRoomValid && !bSealsAvailable)
 		{
-			if (IsValid(Instancer) &&
-				IsValid(Instancer->GetStaticMesh()) &&
-				Instancer->GetStaticMesh()->GetName() == TEXT("SM_Crypt_Wall"))
+			TInlineComponentArray<UInstancedStaticMeshComponent*> Instancers(RoomActor);
+			int32 InstancerIndex = 0;
+			while (InstancerIndex < Instancers.Num() && !WallInstancer)
 			{
-				WallInstancer = Instancer;
-				break;
+				UInstancedStaticMeshComponent* Candidate = Instancers[InstancerIndex];
+				if (IsValid(Candidate) && IsValid(Candidate->GetStaticMesh()) &&
+					Candidate->GetStaticMesh()->GetName() == TEXT("SM_Crypt_Wall"))
+				{
+					WallInstancer = Candidate;
+				}
+				++InstancerIndex;
 			}
-		}
-		if (!WallInstancer)
-		{
-			UE_LOG(
-				LogTemp,
-				Warning,
-				TEXT("Procedural wall joint seals were skipped because the generated wall instancer was not found."));
-			return false;
-		}
-
-		UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(
-			nullptr,
-			TEXT("/Engine/BasicShapes/Cube.Cube"));
-		if (!CubeMesh)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Procedural wall joint seals could not load the cube mesh."));
-			return false;
-		}
-
-		UHierarchicalInstancedStaticMeshComponent* JointSeals =
-			CreateDecorationInstancer(
-				RoomActor,
-				CubeMesh,
-				TEXT("ProceduralWallJointSeals"),
-				false);
-		if (!JointSeals)
-		{
-			return false;
-		}
-
-		UStaticMesh* WallMesh = WallInstancer->GetStaticMesh();
-		if (WallMesh->GetMaterial(0))
-		{
-			JointSeals->SetMaterial(0, WallMesh->GetMaterial(0));
-		}
-
-		const FBoxSphereBounds WallBounds = WallMesh->GetBounds();
-		const double WallMinX = WallBounds.Origin.X - WallBounds.BoxExtent.X;
-		const double WallMaxX = WallBounds.Origin.X + WallBounds.BoxExtent.X;
-		const FBoxSphereBounds CubeBounds = CubeMesh->GetBounds();
-		const double SealScaleX =
-			WallJointSealWidth / FMath::Max(1.0, CubeBounds.BoxExtent.X * 2.0);
-		const double SealScaleY =
-			WallJointSealWidth / FMath::Max(1.0, CubeBounds.BoxExtent.Y * 2.0);
-		const double SealScaleZ =
-			GeneratedWallTopZ / FMath::Max(1.0, CubeBounds.BoxExtent.Z * 2.0);
-		const double SealLocalZ =
-			GeneratedWallTopZ * 0.5 - CubeBounds.Origin.Z * SealScaleZ;
-
-		TMap<FIntPoint, FVector> UniqueLocalEndpoints;
-		for (int32 InstanceIndex = 0;
-			InstanceIndex < WallInstancer->GetInstanceCount();
-			++InstanceIndex)
-		{
-			FTransform WallWorldTransform;
-			if (!WallInstancer->GetInstanceTransform(
-				InstanceIndex,
-				WallWorldTransform,
-				true))
+			if (!WallInstancer)
 			{
-				continue;
-			}
-
-			const double EndpointXs[] = {WallMinX, WallMaxX};
-			for (const double EndpointX : EndpointXs)
-			{
-				const FVector WorldEndpoint = WallWorldTransform.TransformPosition(FVector(
-					EndpointX,
-					WallBounds.Origin.Y,
-					WallBounds.Origin.Z));
-				FVector LocalEndpoint =
-					RoomActor->GetActorTransform().InverseTransformPosition(WorldEndpoint);
-				LocalEndpoint.Z = SealLocalZ;
-				const FIntPoint EndpointKey(
-					FMath::RoundToInt(LocalEndpoint.X),
-					FMath::RoundToInt(LocalEndpoint.Y));
-				UniqueLocalEndpoints.Add(EndpointKey, LocalEndpoint);
+				UE_LOG(LogTemp, Warning,
+					TEXT("Procedural wall joint seals were skipped because the generated wall instancer was not found."));
 			}
 		}
 
-		for (const TPair<FIntPoint, FVector>& Endpoint : UniqueLocalEndpoints)
+		UStaticMesh* CubeMesh = WallInstancer
+			? LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"))
+			: nullptr;
+		if (WallInstancer && !CubeMesh)
 		{
-			JointSeals->AddInstance(FTransform(
-				FRotator::ZeroRotator,
-				Endpoint.Value,
-				FVector(SealScaleX, SealScaleY, SealScaleZ)));
+			UE_LOG(LogTemp, Warning,
+				TEXT("Procedural wall joint seals could not load the cube mesh."));
 		}
 
-		UE_LOG(
-			LogTemp,
-			Display,
-			TEXT("Procedural wall joints sealed at %d generated module endpoints using %.0f cm opaque columns."),
-			UniqueLocalEndpoints.Num(),
-			WallJointSealWidth);
-		return true;
+		UHierarchicalInstancedStaticMeshComponent* JointSeals = CubeMesh
+			? CreateDecorationInstancer(RoomActor, CubeMesh,
+				TEXT("ProceduralWallJointSeals"), false)
+			: nullptr;
+		if (JointSeals)
+		{
+			UStaticMesh* WallMesh = WallInstancer->GetStaticMesh();
+			if (WallMesh->GetMaterial(0))
+			{
+				JointSeals->SetMaterial(0, WallMesh->GetMaterial(0));
+			}
+
+			const FBoxSphereBounds WallBounds = WallMesh->GetBounds();
+			const double WallMinX = WallBounds.Origin.X - WallBounds.BoxExtent.X;
+			const double WallMaxX = WallBounds.Origin.X + WallBounds.BoxExtent.X;
+			const FBoxSphereBounds CubeBounds = CubeMesh->GetBounds();
+			const double SealScaleX = WallJointSealWidth /
+				FMath::Max(1.0, CubeBounds.BoxExtent.X * 2.0);
+			const double SealScaleY = WallJointSealWidth /
+				FMath::Max(1.0, CubeBounds.BoxExtent.Y * 2.0);
+			const double SealScaleZ = GeneratedWallTopZ /
+				FMath::Max(1.0, CubeBounds.BoxExtent.Z * 2.0);
+			const double SealLocalZ = GeneratedWallTopZ * 0.5 -
+				CubeBounds.Origin.Z * SealScaleZ;
+
+			TMap<FIntPoint, FVector> UniqueLocalEndpoints;
+			for (int32 InstanceIndex = 0;
+				InstanceIndex < WallInstancer->GetInstanceCount(); ++InstanceIndex)
+			{
+				FTransform WallWorldTransform;
+				if (WallInstancer->GetInstanceTransform(
+					InstanceIndex, WallWorldTransform, true))
+				{
+					const double EndpointXs[] = {WallMinX, WallMaxX};
+					for (const double EndpointX : EndpointXs)
+					{
+						const FVector WorldEndpoint = WallWorldTransform.TransformPosition(
+							FVector(EndpointX, WallBounds.Origin.Y, WallBounds.Origin.Z));
+						FVector LocalEndpoint = RoomActor->GetActorTransform()
+							.InverseTransformPosition(WorldEndpoint);
+						LocalEndpoint.Z = SealLocalZ;
+						const FIntPoint EndpointKey(
+							FMath::RoundToInt(LocalEndpoint.X),
+							FMath::RoundToInt(LocalEndpoint.Y));
+						UniqueLocalEndpoints.Add(EndpointKey, LocalEndpoint);
+					}
+				}
+			}
+
+			for (const TPair<FIntPoint, FVector>& Endpoint : UniqueLocalEndpoints)
+			{
+				JointSeals->AddInstance(FTransform(
+					FRotator::ZeroRotator, Endpoint.Value,
+					FVector(SealScaleX, SealScaleY, SealScaleZ)));
+			}
+			UE_LOG(LogTemp, Display,
+				TEXT("Procedural wall joints sealed at %d generated module endpoints using %.0f cm opaque columns."),
+				UniqueLocalEndpoints.Num(), WallJointSealWidth);
+			bSealsAvailable = true;
+		}
+		return bSealsAvailable;
 	}
 
 	static UParticleSystemComponent* CreateDecorationFire(
@@ -461,19 +428,14 @@ namespace ProceduralRoom
 		const FName BaseName,
 		const FTransform& RelativeTransform)
 	{
-		if (!IsValid(RoomActor) || !IsValid(Parent) || !IsValid(Template))
+		UParticleSystemComponent* FireComponent =
+			IsValid(RoomActor) && IsValid(Parent) && IsValid(Template)
+			? NewObject<UParticleSystemComponent>(
+				RoomActor,
+				MakeUniqueObjectName(RoomActor, UParticleSystemComponent::StaticClass(), BaseName))
+			: nullptr;
+		if (FireComponent)
 		{
-			return nullptr;
-		}
-
-		UParticleSystemComponent* FireComponent = NewObject<UParticleSystemComponent>(
-			RoomActor,
-			MakeUniqueObjectName(RoomActor, UParticleSystemComponent::StaticClass(), BaseName));
-		if (!FireComponent)
-		{
-			return nullptr;
-		}
-
 		FireComponent->ComponentTags.AddUnique(ProceduralDecorationComponentTag);
 		RoomActor->AddInstanceComponent(FireComponent);
 		FireComponent->SetupAttachment(Parent);
@@ -483,6 +445,7 @@ namespace ProceduralRoom
 		FireComponent->RegisterComponent();
 		FireComponent->SetRelativeTransform(RelativeTransform);
 		FireComponent->ActivateSystem(true);
+		}
 		return FireComponent;
 	}
 
@@ -494,19 +457,13 @@ namespace ProceduralRoom
 		const float Intensity,
 		const float AttenuationRadius)
 	{
-		if (!IsValid(RoomActor) || !IsValid(Parent))
+		UPointLightComponent* Light = IsValid(RoomActor) && IsValid(Parent)
+			? NewObject<UPointLightComponent>(
+				RoomActor,
+				MakeUniqueObjectName(RoomActor, UPointLightComponent::StaticClass(), BaseName))
+			: nullptr;
+		if (Light)
 		{
-			return nullptr;
-		}
-
-		UPointLightComponent* Light = NewObject<UPointLightComponent>(
-			RoomActor,
-			MakeUniqueObjectName(RoomActor, UPointLightComponent::StaticClass(), BaseName));
-		if (!Light)
-		{
-			return nullptr;
-		}
-
 		Light->ComponentTags.AddUnique(ProceduralDecorationComponentTag);
 		RoomActor->AddInstanceComponent(Light);
 		Light->SetupAttachment(Parent);
@@ -517,6 +474,7 @@ namespace ProceduralRoom
 		Light->SetCastShadows(true);
 		Light->RegisterComponent();
 		Light->SetRelativeLocation(RelativeLocation);
+		}
 		return Light;
 	}
 
@@ -604,12 +562,11 @@ namespace ProceduralRoom
 
 	static bool SnapDialogueNpcToFloor(AActor* Npc, double& OutFloorZ)
 	{
-		if (!IsValid(Npc) || !Npc->GetWorld())
-		{
-			return false;
-		}
-
-		const FVector CurrentLocation = Npc->GetActorLocation();
+		bool bSnapped = false;
+		UWorld* World = IsValid(Npc) ? Npc->GetWorld() : nullptr;
+		const FVector CurrentLocation = IsValid(Npc)
+			? Npc->GetActorLocation()
+			: FVector::ZeroVector;
 		const FVector TraceStart = CurrentLocation + FVector(0.0, 0.0, 25.0);
 		const FVector TraceEnd = CurrentLocation - FVector(0.0, 0.0, 1500.0);
 		FCollisionQueryParams QueryParams(
@@ -617,16 +574,14 @@ namespace ProceduralRoom
 			false,
 			Npc);
 		FHitResult FloorHit;
-		if (!Npc->GetWorld()->LineTraceSingleByChannel(
+		const bool bFloorFound = World && World->LineTraceSingleByChannel(
 			FloorHit,
 			TraceStart,
 			TraceEnd,
 			ECC_Visibility,
-			QueryParams))
+			QueryParams);
+		if (bFloorFound)
 		{
-			return false;
-		}
-
 		double CapsuleHalfHeight = 0.0;
 		if (const UCapsuleComponent* Capsule =
 			Npc->FindComponentByClass<UCapsuleComponent>())
@@ -653,21 +608,19 @@ namespace ProceduralRoom
 				Movement->StopMovementImmediately();
 			}
 		}
-		return true;
+		bSnapped = true;
+		}
+		return bSnapped;
 	}
 
 	static void SpawnDialogueNpcAndWaitForExit(
 		AActor* RoomActor,
 		const FTransform& NpcWorldTransform)
 	{
-		if (!IsValid(RoomActor) || !RoomActor->GetWorld())
+		UWorld* World = IsValid(RoomActor) ? RoomActor->GetWorld() : nullptr;
+		if (World)
 		{
-			return;
-		}
-
 		KeepRoomExitLocked(RoomActor);
-
-		UWorld* World = RoomActor->GetWorld();
 		static const TCHAR* NpcClassPaths[] =
 		{
 			TEXT("/Game/MyContent/Npcs/BP_Sir_Lanzarote.BP_Sir_Lanzarote_C"),
@@ -708,9 +661,9 @@ namespace ProceduralRoom
 				TEXT("Unique room dialogue NPC %s could not be loaded; opening the portal to avoid a soft lock."),
 				NpcClassPaths[NpcIndex]);
 			ActivateRoomExit(RoomActor);
-			return;
 		}
-
+		else
+		{
 		FActorSpawnParameters SpawnParameters;
 		SpawnParameters.SpawnCollisionHandlingOverride =
 			ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
@@ -725,9 +678,9 @@ namespace ProceduralRoom
 				Error,
 				TEXT("Room dialogue NPC failed to spawn; opening the portal to avoid a soft lock."));
 			ActivateRoomExit(RoomActor);
-			return;
 		}
-
+		else
+		{
 		double NpcFloorZ = 0.0;
 		if (SnapDialogueNpcToFloor(Npc, NpcFloorZ))
 		{
@@ -765,9 +718,9 @@ namespace ProceduralRoom
 				Warning,
 				TEXT("NPCBase has no dialogue lines; opening the portal to avoid a soft lock."));
 			ActivateRoomExit(RoomActor);
-			return;
 		}
-
+		else
+		{
 		const TWeakObjectPtr<AActor> WeakRoomActor(RoomActor);
 		const TWeakObjectPtr<AActor> WeakNpc(Npc);
 		const TWeakObjectPtr<UWorld> WeakWorld(World);
@@ -778,16 +731,15 @@ namespace ProceduralRoom
 			FTimerDelegate::CreateLambda(
 				[WeakRoomActor, WeakNpc, WeakWorld, DialogueTimer, bDialogueStarted, NpcIndex]()
 			{
-				if (!WeakWorld.IsValid() || !WeakRoomActor.IsValid())
+				const bool bContextValid = WeakWorld.IsValid() && WeakRoomActor.IsValid();
+				if (!bContextValid)
 				{
 					if (WeakWorld.IsValid())
 					{
 						WeakWorld->GetTimerManager().ClearTimer(*DialogueTimer);
 					}
-					return;
 				}
-
-				if (!WeakNpc.IsValid())
+				else if (!WeakNpc.IsValid())
 				{
 					UE_LOG(
 						LogTemp,
@@ -795,9 +747,9 @@ namespace ProceduralRoom
 						TEXT("NPCBase disappeared before finishing its dialogue; opening the portal to avoid a soft lock."));
 					ActivateRoomExit(WeakRoomActor.Get());
 					WeakWorld->GetTimerManager().ClearTimer(*DialogueTimer);
-					return;
 				}
-
+				else
+				{
 				const int32 DialogueIndex = FMath::RoundToInt(
 					ReadNumber(WeakNpc.Get(), TEXT("IndexDialogo"), 0.0));
 				if (DialogueIndex > 0)
@@ -826,6 +778,7 @@ namespace ProceduralRoom
 								WeakRoomActor.Get(),
 								URoomPowerUpSelectionComponent::StaticClass(),
 								TEXT("RoomPowerUpSelection")));
+					bool bSelectionShown = false;
 					if (SelectionComponent)
 					{
 						SelectionComponent->ComponentTags.AddUnique(
@@ -850,23 +803,31 @@ namespace ProceduralRoom
 								WeakRoomActor.Get(),
 								TEXT("RoomSeed"),
 								1.0));
-						if (SelectionComponent->ShowSelection(SelectionSeed, NpcIndex))
+						bSelectionShown =
+							SelectionComponent->ShowSelection(SelectionSeed, NpcIndex);
+						if (!bSelectionShown)
 						{
-							return;
+							SelectionComponent->DestroyComponent();
 						}
-
-						SelectionComponent->DestroyComponent();
 					}
 
-					UE_LOG(
-						LogTemp,
-						Warning,
-						TEXT("Power-up selection could not be shown; opening the portal to avoid a soft lock."));
-					ActivateRoomExit(WeakRoomActor.Get());
+					if (!bSelectionShown)
+					{
+						UE_LOG(
+							LogTemp,
+							Warning,
+							TEXT("Power-up selection could not be shown; opening the portal to avoid a soft lock."));
+						ActivateRoomExit(WeakRoomActor.Get());
+					}
+				}
 				}
 			}),
 			0.1f,
 			true);
+		}
+		}
+		}
+		}
 	}
 
 	static void MonitorBaseEnemies(
@@ -900,12 +861,8 @@ namespace ProceduralRoom
 			for (TActorIterator<AActor> ActorIt(WeakWorld.Get()); ActorIt; ++ActorIt)
 			{
 				AActor* Enemy = *ActorIt;
-				if (!IsValid(Enemy) || !Enemy->ActorHasTag(ProceduralEnemyTag))
-				{
-					continue;
-				}
-
-				if (!ReadBool(Enemy, TEXT("Muerto"), false))
+				if (IsValid(Enemy) && Enemy->ActorHasTag(ProceduralEnemyTag) &&
+					!ReadBool(Enemy, TEXT("Muerto"), false))
 				{
 					++LivingEnemies;
 
@@ -953,13 +910,13 @@ namespace ProceduralRoom
 	static bool WriteTransform(UObject* Object, const FName Name, const FTransform& Value)
 	{
 		FStructProperty* Property = CastField<FStructProperty>(FindProperty(Object, Name));
-		if (!Property || Property->Struct != TBaseStructure<FTransform>::Get())
+		const bool bCanWrite = Property &&
+			Property->Struct == TBaseStructure<FTransform>::Get();
+		if (bCanWrite)
 		{
-			return false;
+			*Property->ContainerPtrToValuePtr<FTransform>(Object) = Value;
 		}
-
-		*Property->ContainerPtrToValuePtr<FTransform>(Object) = Value;
-		return true;
+		return bCanWrite;
 	}
 
 	static FRoomConfig ReadConfig(const AActor* Actor, const UPCGRandomRoomSettings* Settings = nullptr)
@@ -1025,11 +982,6 @@ namespace ProceduralRoom
 			return A.X == B.X ? A.Y < B.Y : A.X < B.X;
 		});
 
-		if (Frontier.IsEmpty())
-		{
-			return;
-		}
-
 		int32 TotalWeight = 0;
 		TArray<int32> Weights;
 		Weights.Reserve(Frontier.Num());
@@ -1041,15 +993,18 @@ namespace ProceduralRoom
 			TotalWeight += Weight;
 		}
 
-		int32 Choice = Random.RandRange(1, TotalWeight);
-		for (int32 Index = 0; Index < Frontier.Num(); ++Index)
+		int32 Choice = Frontier.IsEmpty() ? 0 : Random.RandRange(1, TotalWeight);
+		int32 Index = 0;
+		bool bCellAdded = false;
+		while (Index < Frontier.Num() && !bCellAdded)
 		{
 			Choice -= Weights[Index];
 			if (Choice <= 0)
 			{
 				Cells.Add(Frontier[Index]);
-				return;
+				bCellAdded = true;
 			}
+			++Index;
 		}
 	}
 
@@ -1066,13 +1021,14 @@ namespace ProceduralRoom
 			for (const FIntPoint& Direction : Directions)
 			{
 				const FIntPoint Next = Current + Direction;
-				if (Next.X < -1 || Next.X > Width || Next.Y < -1 || Next.Y > Height ||
-					Cells.Contains(Next) || Exterior.Contains(Next))
+				const bool bCanVisit = Next.X >= -1 && Next.X <= Width &&
+					Next.Y >= -1 && Next.Y <= Height && !Cells.Contains(Next) &&
+					!Exterior.Contains(Next);
+				if (bCanVisit)
 				{
-					continue;
+					Exterior.Add(Next);
+					Queue.Add(Next);
 				}
-				Exterior.Add(Next);
-				Queue.Add(Next);
 			}
 		}
 		return Exterior;
@@ -1147,13 +1103,14 @@ namespace ProceduralRoom
 				Layout.CellSet.Add(FIntPoint(CenterX, CenterY - 1));
 			}
 
-			while (Layout.CellSet.Num() < TargetCells)
+			bool bCanAddCells = true;
+			while (Layout.CellSet.Num() < TargetCells && bCanAddCells)
 			{
 				const int32 PreviousCount = Layout.CellSet.Num();
 				AddConnectedCell(Layout.CellSet, Layout.TilesX, Layout.TilesY, Random);
 				if (Layout.CellSet.Num() == PreviousCount)
 				{
-					break;
+					bCanAddCells = false;
 				}
 			}
 
@@ -1176,18 +1133,16 @@ namespace ProceduralRoom
 			for (const FIntPoint& Direction : Directions)
 			{
 				const FIntPoint Neighbour = Cell + Direction;
-				if (Layout.CellSet.Contains(Neighbour))
+				if (!Layout.CellSet.Contains(Neighbour))
 				{
-					continue;
+					FBoundaryEdge& Edge = Layout.BoundaryEdges.Emplace_GetRef();
+					Edge.Cell = Cell;
+					Edge.Direction = Direction;
+					Edge.LocalPosition = CellPosition + FVector(Direction.X, Direction.Y, 0.0) * (Config.TileSize * 0.5);
+					Edge.WallYaw = Direction.X == 0 ? 0.0 : 90.0;
+					Edge.ExitYaw = FMath::RadiansToDegrees(FMath::Atan2(static_cast<double>(Direction.Y), static_cast<double>(Direction.X)));
+					Edge.bExterior = ExteriorEmpty.Contains(Neighbour);
 				}
-
-				FBoundaryEdge& Edge = Layout.BoundaryEdges.Emplace_GetRef();
-				Edge.Cell = Cell;
-				Edge.Direction = Direction;
-				Edge.LocalPosition = CellPosition + FVector(Direction.X, Direction.Y, 0.0) * (Config.TileSize * 0.5);
-				Edge.WallYaw = Direction.X == 0 ? 0.0 : 90.0;
-				Edge.ExitYaw = FMath::RadiansToDegrees(FMath::Atan2(static_cast<double>(Direction.Y), static_cast<double>(Direction.X)));
-				Edge.bExterior = ExteriorEmpty.Contains(Neighbour);
 			}
 		}
 
@@ -1195,17 +1150,15 @@ namespace ProceduralRoom
 		for (int32 Index = 0; Index < Layout.BoundaryEdges.Num(); ++Index)
 		{
 			const FBoundaryEdge& Edge = Layout.BoundaryEdges[Index];
-			if (!Edge.bExterior)
+			if (Edge.bExterior)
 			{
-				continue;
-			}
-
-			const double DistanceScore = Edge.LocalPosition.SizeSquared2D();
-			const double Score = DistanceScore + Random.FRandRange(0.0f, static_cast<float>(Config.TileSize * Config.TileSize * 2.0));
-			if (Score > BestScore)
-			{
-				BestScore = Score;
-				Layout.ExitEdgeIndex = Index;
+				const double DistanceScore = Edge.LocalPosition.SizeSquared2D();
+				const double Score = DistanceScore + Random.FRandRange(0.0f, static_cast<float>(Config.TileSize * Config.TileSize * 2.0));
+				if (Score > BestScore)
+				{
+					BestScore = Score;
+					Layout.ExitEdgeIndex = Index;
+				}
 			}
 		}
 
@@ -1260,28 +1213,29 @@ namespace ProceduralRoom
 
 		TArray<FIntPoint> Result;
 		Result.Reserve(2);
-		for (const FIntPoint& Cell : PreferredCells)
+		int32 PreferredIndex = 0;
+		while (PreferredIndex < PreferredCells.Num() && Result.Num() < 2)
 		{
+			const FIntPoint& Cell = PreferredCells[PreferredIndex];
 			if (Result.IsEmpty() ||
 				FMath::Abs(Cell.X - Result[0].X) + FMath::Abs(Cell.Y - Result[0].Y) >= 6)
 			{
 				Result.Add(Cell);
-				if (Result.Num() == 2)
-				{
-					break;
-				}
 			}
+			++PreferredIndex;
 		}
 
 		if (Result.Num() < 2)
 		{
-			for (const FIntPoint& Cell : PreferredCells)
+			PreferredIndex = 0;
+			while (PreferredIndex < PreferredCells.Num() && Result.Num() < 2)
 			{
+				const FIntPoint& Cell = PreferredCells[PreferredIndex];
 				if (!Result.Contains(Cell))
 				{
 					Result.Add(Cell);
-					break;
 				}
+				++PreferredIndex;
 			}
 		}
 		return Result;
@@ -1311,24 +1265,25 @@ namespace ProceduralRoom
 	{
 		FIntPoint Start = FIntPoint::ZeroValue;
 		bool bFoundStart = false;
-		for (const FIntPoint& Cell : RoomCells)
+		TArray<FIntPoint> RoomCellArray = RoomCells.Array();
+		int32 StartIndex = 0;
+		while (StartIndex < RoomCellArray.Num() && !bFoundStart)
 		{
+			const FIntPoint& Cell = RoomCellArray[StartIndex];
 			if (!BlockedCells.Contains(Cell))
 			{
 				Start = Cell;
 				bFoundStart = true;
-				break;
 			}
+			++StartIndex;
 		}
-		if (!bFoundStart)
-		{
-			return false;
-		}
-
 		TSet<FIntPoint> Visited;
 		TArray<FIntPoint> Queue;
-		Visited.Add(Start);
-		Queue.Add(Start);
+		if (bFoundStart)
+		{
+			Visited.Add(Start);
+			Queue.Add(Start);
+		}
 		for (int32 QueueIndex = 0; QueueIndex < Queue.Num(); ++QueueIndex)
 		{
 			for (const FIntPoint& Direction : Directions)
@@ -1343,7 +1298,9 @@ namespace ProceduralRoom
 				}
 			}
 		}
-		return Visited.Num() == RoomCells.Num() - BlockedCells.Num();
+		const bool bConnected = bFoundStart &&
+			Visited.Num() == RoomCells.Num() - BlockedCells.Num();
+		return bConnected;
 	}
 
 	struct FRoomAccessibilityResult
@@ -1369,33 +1326,36 @@ namespace ProceduralRoom
 			}
 		}
 
-		if (Result.WalkableTiles <= 0)
+		bool bCanValidate = Result.WalkableTiles > 0;
+		if (!bCanValidate)
 		{
 			Result.Message = TEXT("La sala no contiene ninguna baldosa transitable.");
-			return Result;
 		}
 
 		const FIntPoint CentreCell(
 			(Layout.TilesX - 1) / 2,
 			(Layout.TilesY - 1) / 2);
 		FIntPoint ArrivalCell(CentreCell.X + 1, CentreCell.Y);
-		if (!Layout.CellSet.Contains(ArrivalCell) ||
-			BlockingCells.Contains(ArrivalCell))
+		if (bCanValidate && (!Layout.CellSet.Contains(ArrivalCell) ||
+			BlockingCells.Contains(ArrivalCell)))
 		{
 			ArrivalCell = CentreCell;
 		}
-		if (!Layout.CellSet.Contains(ArrivalCell) ||
-			BlockingCells.Contains(ArrivalCell))
+		if (bCanValidate && (!Layout.CellSet.Contains(ArrivalCell) ||
+			BlockingCells.Contains(ArrivalCell)))
 		{
 			Result.Message =
 				TEXT("La baldosa de llegada del jugador esta bloqueada.");
-			return Result;
+			bCanValidate = false;
 		}
 
 		TSet<FIntPoint> Visited;
 		TArray<FIntPoint> Queue;
-		Visited.Add(ArrivalCell);
-		Queue.Add(ArrivalCell);
+		if (bCanValidate)
+		{
+			Visited.Add(ArrivalCell);
+			Queue.Add(ArrivalCell);
+		}
 		for (int32 QueueIndex = 0; QueueIndex < Queue.Num(); ++QueueIndex)
 		{
 			for (const FIntPoint& Direction : Directions)
@@ -1411,27 +1371,30 @@ namespace ProceduralRoom
 			}
 		}
 
-		Result.ReachableTiles = Visited.Num();
-		for (const FIntPoint& Cell : Layout.Cells)
+		if (bCanValidate)
 		{
-			if (!BlockingCells.Contains(Cell) && !Visited.Contains(Cell))
+			Result.ReachableTiles = Visited.Num();
+			for (const FIntPoint& Cell : Layout.Cells)
 			{
-				Result.UnreachableTiles.Add(Cell);
+				if (!BlockingCells.Contains(Cell) && !Visited.Contains(Cell))
+				{
+					Result.UnreachableTiles.Add(Cell);
+				}
 			}
-		}
 
-		Result.bPlayable =
-			Result.ReachableTiles == Result.WalkableTiles &&
-			Result.UnreachableTiles.IsEmpty();
-		Result.Message = Result.bPlayable
-			? FString::Printf(
-				TEXT("Sala jugable: las %d baldosas transitables estan conectadas."),
-				Result.WalkableTiles)
-			: FString::Printf(
-				TEXT("Sala no jugable: %d de %d baldosas son alcanzables; %d han quedado aisladas."),
-				Result.ReachableTiles,
-				Result.WalkableTiles,
-				Result.UnreachableTiles.Num());
+			Result.bPlayable =
+				Result.ReachableTiles == Result.WalkableTiles &&
+				Result.UnreachableTiles.IsEmpty();
+			Result.Message = Result.bPlayable
+				? FString::Printf(
+					TEXT("Sala jugable: las %d baldosas transitables estan conectadas."),
+					Result.WalkableTiles)
+				: FString::Printf(
+					TEXT("Sala no jugable: %d de %d baldosas son alcanzables; %d han quedado aisladas."),
+					Result.ReachableTiles,
+					Result.WalkableTiles,
+					Result.UnreachableTiles.Num());
+		}
 		return Result;
 	}
 
@@ -1479,22 +1442,20 @@ namespace ProceduralRoom
 			for (int32 GroupIndex = 0; GroupIndex < GroupLength; ++GroupIndex)
 			{
 				const FIntPoint Candidate = SeedCell + Axis * Offsets[GroupIndex];
-				if (!Candidates.Contains(Candidate) || BlockedCells.Contains(Candidate))
+				const bool bCandidateAvailable = Candidates.Contains(Candidate) &&
+					!BlockedCells.Contains(Candidate);
+				if (bCandidateAvailable)
 				{
-					continue;
+					TSet<FIntPoint> TrialBlocked = BlockedCells;
+					TrialBlocked.Add(Candidate);
+					if (LeavesRoomConnected(Layout.CellSet, TrialBlocked))
+					{
+						BlockedCells.Add(Candidate);
+						FObstaclePlacement& Placement = Result.Emplace_GetRef();
+						Placement.Cell = Candidate;
+						Placement.Yaw = Axis.X != 0 ? 0.0 : 90.0;
+					}
 				}
-
-				TSet<FIntPoint> TrialBlocked = BlockedCells;
-				TrialBlocked.Add(Candidate);
-				if (!LeavesRoomConnected(Layout.CellSet, TrialBlocked))
-				{
-					continue;
-				}
-
-				BlockedCells.Add(Candidate);
-				FObstaclePlacement& Placement = Result.Emplace_GetRef();
-				Placement.Cell = Candidate;
-				Placement.Yaw = Axis.X != 0 ? 0.0 : 90.0;
 			}
 		}
 		return Result;
@@ -1510,18 +1471,18 @@ namespace ProceduralRoom
 		const bool bObstacle,
 		const bool bBlocksMovement)
 	{
-		if (!IsValid(RoomActor) || !RoomActor->GetWorld())
-		{
-			return nullptr;
-		}
-
-		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, AssetPath);
+		UWorld* World = IsValid(RoomActor) ? RoomActor->GetWorld() : nullptr;
+		UStaticMesh* Mesh = World ? LoadObject<UStaticMesh>(nullptr, AssetPath) : nullptr;
 		if (!Mesh)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Procedural room prop could not load: %s"), AssetPath);
-			return nullptr;
+			if (World)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Procedural room prop could not load: %s"), AssetPath);
+			}
 		}
-
+		AStaticMeshActor* Prop = nullptr;
+		if (Mesh)
+		{
 		const FBoxSphereBounds MeshBounds = Mesh->GetBounds();
 		FVector LocalPosition = LocalPosition2D;
 		LocalPosition.Z = -(MeshBounds.Origin.Z - MeshBounds.BoxExtent.Z) * Scale.Z + 2.0;
@@ -1533,15 +1494,12 @@ namespace ProceduralRoom
 		SpawnParameters.Owner = RoomActor;
 		SpawnParameters.SpawnCollisionHandlingOverride =
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		AStaticMeshActor* Prop = RoomActor->GetWorld()->SpawnActor<AStaticMeshActor>(
+		Prop = World->SpawnActor<AStaticMeshActor>(
 			AStaticMeshActor::StaticClass(),
 			WorldTransform,
 			SpawnParameters);
-		if (!Prop)
+		if (Prop)
 		{
-			return nullptr;
-		}
-
 		Prop->Tags.AddUnique(ProceduralPropTag);
 		Prop->Tags.AddUnique(
 			bObstacle ? ProceduralObstacleTag : ProceduralLegacyDecorationTag);
@@ -1585,6 +1543,8 @@ namespace ProceduralRoom
 					TEXT("Procedural decorative vase spawned with blocking collision: %s."),
 					*Prop->GetName());
 			}
+		}
+		}
 		}
 		return Prop;
 	}
@@ -1691,6 +1651,7 @@ namespace ProceduralRoom
 			const int32 AssetIndex =
 				(Index + DecorationAssetOffset) % UE_ARRAY_COUNT(DecorationAssets);
 			const bool bBlocksMovement = AssetIndex == 3;
+			bool bCanPlaceDecoration = true;
 			if (bBlocksMovement)
 			{
 				TSet<FIntPoint> TrialBlockingCells =
@@ -1706,9 +1667,11 @@ namespace ProceduralRoom
 						TEXT("[VALIDACION SALA] Jarron descartado en (%d,%d): bloquearia el unico paso disponible."),
 						Cell.X,
 						Cell.Y);
-					continue;
+					bCanPlaceDecoration = false;
 				}
 			}
+			if (bCanPlaceDecoration)
+			{
 			const double UniformScale =
 				DecorationBaseScales[AssetIndex] * Random.FRandRange(0.78f, 1.25f);
 			const FVector LocalPosition(
@@ -1737,6 +1700,7 @@ namespace ProceduralRoom
 				}
 				++Result.Decorations;
 			}
+			}
 		}
 
 		UE_LOG(
@@ -1756,10 +1720,8 @@ namespace ProceduralRoom
 		const TSet<FIntPoint>& ReservedFloorCells)
 	{
 		FGeneratedDecorationCounts Counts;
-		if (!IsValid(RoomActor) || Layout.Cells.IsEmpty())
+		if (IsValid(RoomActor) && !Layout.Cells.IsEmpty())
 		{
-			return Counts;
-		}
 
 		UStaticMesh* CeilingFlat = LoadObject<UStaticMesh>(
 			nullptr,
@@ -1939,32 +1901,30 @@ namespace ProceduralRoom
 				RoomActor,
 				TEXT("ProceduralTorchAnchor"),
 				FTransform(LocalRotation, LocalPosition));
-			if (!Anchor)
+			if (Anchor)
 			{
-				continue;
+				CreateDecorationMesh(
+					RoomActor,
+					Anchor,
+					TorchMesh,
+					TEXT("ProceduralTorchMesh"),
+					FTransform(FRotator::ZeroRotator, FVector::ZeroVector, FVector(0.75)),
+					false);
+				CreateDecorationFire(
+					RoomActor,
+					Anchor,
+					TorchFire,
+					TEXT("ProceduralTorchFire"),
+					FTransform(FRotator::ZeroRotator, FVector(0.0, 39.0, 33.0), FVector(0.75)));
+				CreateDecorationLight(
+					RoomActor,
+					Anchor,
+					TEXT("ProceduralTorchLight"),
+					FVector(0.0, 31.0, 38.0),
+					1400.0f,
+					650.0f);
+				++Counts.Torches;
 			}
-
-			CreateDecorationMesh(
-				RoomActor,
-				Anchor,
-				TorchMesh,
-				TEXT("ProceduralTorchMesh"),
-				FTransform(FRotator::ZeroRotator, FVector::ZeroVector, FVector(0.75)),
-				false);
-			CreateDecorationFire(
-				RoomActor,
-				Anchor,
-				TorchFire,
-				TEXT("ProceduralTorchFire"),
-				FTransform(FRotator::ZeroRotator, FVector(0.0, 39.0, 33.0), FVector(0.75)));
-			CreateDecorationLight(
-				RoomActor,
-				Anchor,
-				TEXT("ProceduralTorchLight"),
-				FVector(0.0, 31.0, 38.0),
-				1400.0f,
-				650.0f);
-			++Counts.Torches;
 		}
 
 		// Floor flames stay away from the portal, player, enemies and the restored
@@ -2016,11 +1976,9 @@ namespace ProceduralRoom
 
 		auto SpawnFloorFire = [&](const FIntPoint& Cell, const bool bSupplemental)
 		{
-			if (SelectedFireCells.Contains(Cell))
+			bool bFireSpawned = false;
+			if (!SelectedFireCells.Contains(Cell))
 			{
-				return false;
-			}
-
 			const FVector LocalPosition(
 				OriginX + Cell.X * Config.TileSize,
 				OriginY + Cell.Y * Config.TileSize,
@@ -2033,11 +1991,8 @@ namespace ProceduralRoom
 				RoomActor,
 				TEXT("ProceduralFloorFireAnchor"),
 				FTransform(LocalRotation, LocalPosition));
-			if (!Anchor)
+			if (Anchor)
 			{
-				return false;
-			}
-
 			// Floor fires intentionally have no prop mesh: only the flame particles
 			// and their warm point light are generated directly over the floor.
 			CreateDecorationFire(
@@ -2053,11 +2008,8 @@ namespace ProceduralRoom
 				FVector(0.0, 0.0, 90.0),
 				FloorFireIntensity,
 				FloorFireRadius);
-			if (!FloorLight)
+			if (FloorLight)
 			{
-				return false;
-			}
-
 			SelectedFireCells.Add(Cell);
 			FloorLightSamples.Add({
 				LocalPosition + FVector(0.0, 0.0, 90.0),
@@ -2073,7 +2025,11 @@ namespace ProceduralRoom
 					Cell.X,
 					Cell.Y);
 			}
-			return true;
+			bFireSpawned = true;
+			}
+			}
+			}
+			return bFireSpawned;
 		};
 
 		for (int32 FireIndex = 0; FireIndex < DesiredFires; ++FireIndex)
@@ -2087,13 +2043,12 @@ namespace ProceduralRoom
 			for (const FFloorLightSample& Light : FloorLightSamples)
 			{
 				const double Distance = FVector::Dist2D(Sample, Light.Position);
-				if (Distance >= Light.Radius)
+				if (Distance < Light.Radius)
 				{
-					continue;
+					const double NormalizedFalloff =
+						1.0 - Distance / Light.Radius;
+					Score += Light.Intensity * FMath::Square(NormalizedFalloff);
 				}
-				const double NormalizedFalloff =
-					1.0 - Distance / Light.Radius;
-				Score += Light.Intensity * FMath::Square(NormalizedFalloff);
 			}
 			return Score;
 		};
@@ -2114,7 +2069,8 @@ namespace ProceduralRoom
 			FloorSamples.Add(Center + FVector(-SampleOffset, -SampleOffset, 0.0));
 		}
 
-		while (Counts.FloorFires < MaximumFiresForCoverage)
+		bool bCanAddCoverageFire = true;
+		while (Counts.FloorFires < MaximumFiresForCoverage && bCanAddCoverageFire)
 		{
 			double DarkestScore = TNumericLimits<double>::Max();
 			FVector DarkestSample = FVector::ZeroVector;
@@ -2130,35 +2086,36 @@ namespace ProceduralRoom
 
 			if (DarkestScore >= MinimumFloorIlluminationScore)
 			{
-				break;
+				bCanAddCoverageFire = false;
 			}
-
+			else
+			{
 			int32 NearestCandidateIndex = INDEX_NONE;
 			double NearestDistanceSquared = TNumericLimits<double>::Max();
 			for (int32 CandidateIndex = 0; CandidateIndex < CoverageFireCells.Num(); ++CandidateIndex)
 			{
 				const FIntPoint& Candidate = CoverageFireCells[CandidateIndex];
-				if (SelectedFireCells.Contains(Candidate))
+				if (!SelectedFireCells.Contains(Candidate))
 				{
-					continue;
-				}
-				const FVector CandidatePosition(
-					OriginX + Candidate.X * Config.TileSize,
-					OriginY + Candidate.Y * Config.TileSize,
-					0.0);
-				const double DistanceSquared =
-					FVector::DistSquared2D(DarkestSample, CandidatePosition);
-				if (DistanceSquared < NearestDistanceSquared)
-				{
-					NearestDistanceSquared = DistanceSquared;
-					NearestCandidateIndex = CandidateIndex;
+					const FVector CandidatePosition(
+						OriginX + Candidate.X * Config.TileSize,
+						OriginY + Candidate.Y * Config.TileSize,
+						0.0);
+					const double DistanceSquared =
+						FVector::DistSquared2D(DarkestSample, CandidatePosition);
+					if (DistanceSquared < NearestDistanceSquared)
+					{
+						NearestDistanceSquared = DistanceSquared;
+						NearestCandidateIndex = CandidateIndex;
+					}
 				}
 			}
 
 			if (NearestCandidateIndex == INDEX_NONE ||
 				!SpawnFloorFire(CoverageFireCells[NearestCandidateIndex], true))
 			{
-				break;
+				bCanAddCoverageFire = false;
+			}
 			}
 		}
 
@@ -2169,7 +2126,8 @@ namespace ProceduralRoom
 		constexpr float CoverageFillRadius = 500.0f;
 		constexpr double CoverageFillHeight = 240.0;
 		int32 CoverageFillLights = 0;
-		while (CoverageFillLights < FloorSamples.Num())
+		bool bCanAddFillLight = true;
+		while (CoverageFillLights < FloorSamples.Num() && bCanAddFillLight)
 		{
 			double DarkestScore = TNumericLimits<double>::Max();
 			FVector DarkestSample = FVector::ZeroVector;
@@ -2184,9 +2142,10 @@ namespace ProceduralRoom
 			}
 			if (DarkestScore >= MinimumFloorIlluminationScore)
 			{
-				break;
+				bCanAddFillLight = false;
 			}
-
+			else
+			{
 			const FVector FillPosition(
 				DarkestSample.X,
 				DarkestSample.Y,
@@ -2206,14 +2165,18 @@ namespace ProceduralRoom
 				: nullptr;
 			if (!FillLight)
 			{
-				break;
+				bCanAddFillLight = false;
 			}
-			FillLight->SetCastShadows(false);
-			FloorLightSamples.Add({
-				FillPosition,
-				CoverageFillIntensity,
-				CoverageFillRadius});
-			++CoverageFillLights;
+			else
+			{
+				FillLight->SetCastShadows(false);
+				FloorLightSamples.Add({
+					FillPosition,
+					CoverageFillIntensity,
+					CoverageFillRadius});
+				++CoverageFillLights;
+			}
+			}
 		}
 
 		double MinimumMeasuredScore = TNumericLimits<double>::Max();
@@ -2249,7 +2212,7 @@ namespace ProceduralRoom
 				MinimumFloorIlluminationScore,
 				SamplesBelowMinimum);
 		}
-
+		}
 		return Counts;
 	}
 }
@@ -2290,17 +2253,11 @@ bool FPCGRandomRoomElement::ExecuteInternal(FPCGContext* Context) const
 	check(Context);
 
 	const UPCGRandomRoomSettings* Settings = Context->GetInputSettings<UPCGRandomRoomSettings>();
-	if (!Settings || !Context->ExecutionSource.IsValid())
+	AActor* Actor = Settings && Context->ExecutionSource.IsValid()
+		? Context->ExecutionSource->GetExecutionState().GetTypedTarget<AActor>()
+		: nullptr;
+	if (Actor)
 	{
-		return true;
-	}
-
-	AActor* Actor = Context->ExecutionSource->GetExecutionState().GetTypedTarget<AActor>();
-	if (!Actor)
-	{
-		return true;
-	}
-
 	const ProceduralRoom::FRoomConfig Config = ProceduralRoom::ReadConfig(Actor, Settings);
 	int32 RoomSeed = FMath::RoundToInt(ProceduralRoom::ReadNumber(Actor, TEXT("RoomSeed"), 0.0));
 	if (RoomSeed == 0)
@@ -2333,11 +2290,8 @@ bool FPCGRandomRoomElement::ExecuteInternal(FPCGContext* Context) const
 
 	for (int32 EdgeIndex = 0; EdgeIndex < Layout.BoundaryEdges.Num(); ++EdgeIndex)
 	{
-		if (Config.bCreateExitOpening && EdgeIndex == Layout.ExitEdgeIndex)
+		if (!Config.bCreateExitOpening || EdgeIndex != Layout.ExitEdgeIndex)
 		{
-			continue;
-		}
-
 		const ProceduralRoom::FBoundaryEdge& Edge = Layout.BoundaryEdges[EdgeIndex];
 		FVector LocalPosition = Edge.LocalPosition;
 		LocalPosition.Z = Settings->WallZ;
@@ -2364,6 +2318,7 @@ bool FPCGRandomRoomElement::ExecuteInternal(FPCGContext* Context) const
 					ProceduralRoom::WallLengthOverlapMultiplier * 0.5,
 				25.0,
 				Settings->NativeModuleSize * EffectiveWallHeightScale * 0.5));
+		}
 	}
 
 	UPCGPointData* FloorData = FPCGContext::NewObject_AnyThread<UPCGPointData>(Context);
@@ -2378,17 +2333,15 @@ bool FPCGRandomRoomElement::ExecuteInternal(FPCGContext* Context) const
 	FPCGTaggedData& WallsOutput = Context->OutputData.TaggedData.Emplace_GetRef();
 	WallsOutput.Pin = UPCGRandomRoomSettings::WallsPinLabel;
 	WallsOutput.Data = WallsData;
-
+	}
 	return true;
 }
 
 bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 {
-	if (!IsValid(RoomActor))
+	bool bRoomPrepared = IsValid(RoomActor);
+	if (bRoomPrepared)
 	{
-		return false;
-	}
-
 	int32 RoomSeed = FMath::RoundToInt(ProceduralRoom::ReadNumber(RoomActor, TEXT("RoomSeed"), 0.0));
 	if (RoomSeed == 0)
 	{
@@ -2440,27 +2393,22 @@ bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 		for (TActorIterator<AActor> ActorIt(RoomActor->GetWorld()); ActorIt; ++ActorIt)
 		{
 			AActor* GeneratedProp = *ActorIt;
-			if (!IsValid(GeneratedProp) ||
-				!GeneratedProp->ActorHasTag(
-					ProceduralRoom::ProceduralPropTag))
+			if (IsValid(GeneratedProp) &&
+				GeneratedProp->ActorHasTag(ProceduralRoom::ProceduralPropTag))
 			{
-				continue;
-			}
-
-			TInlineComponentArray<UBoxComponent*> BlockingBoxes(GeneratedProp);
-			const bool bBlocksPawn = BlockingBoxes.ContainsByPredicate(
-				[](const UBoxComponent* Box)
+				TInlineComponentArray<UBoxComponent*> BlockingBoxes(GeneratedProp);
+				const bool bBlocksPawn = BlockingBoxes.ContainsByPredicate(
+					[](const UBoxComponent* Box)
+					{
+						return IsValid(Box) &&
+							Box->GetCollisionEnabled() != ECollisionEnabled::NoCollision &&
+							Box->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block;
+					});
+				if (bBlocksPawn)
 				{
-					return IsValid(Box) &&
-						Box->GetCollisionEnabled() !=
-							ECollisionEnabled::NoCollision &&
-						Box->GetCollisionResponseToChannel(ECC_Pawn) ==
-							ECR_Block;
-				});
-			if (bBlocksPawn)
-			{
-				GeneratedProp->Destroy();
-				++RemovedBlockers;
+					GeneratedProp->Destroy();
+					++RemovedBlockers;
+				}
 			}
 		}
 
@@ -2552,18 +2500,16 @@ bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 		int32 FurthestDistance = -1;
 		for (const FIntPoint& Cell : Layout.Cells)
 		{
-			if (ChosenEnemyCells.Contains(Cell))
+			if (!ChosenEnemyCells.Contains(Cell))
 			{
-				continue;
-			}
-
-			const int32 CentreDistance =
-				FMath::Abs(Cell.X - CentreCell.X) +
-				FMath::Abs(Cell.Y - CentreCell.Y);
-			if (CentreDistance > FurthestDistance)
-			{
-				FurthestDistance = CentreDistance;
-				ChosenNpcCell = Cell;
+				const int32 CentreDistance =
+					FMath::Abs(Cell.X - CentreCell.X) +
+					FMath::Abs(Cell.Y - CentreCell.Y);
+				if (CentreDistance > FurthestDistance)
+				{
+					FurthestDistance = CentreDistance;
+					ChosenNpcCell = Cell;
+				}
 			}
 		}
 	}
@@ -2644,12 +2590,9 @@ bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 			FTimerDelegate::CreateLambda(
 				[WeakRoomActor, EnemyWorldTransforms, NpcWorldTransform]()
 		{
-			if (!WeakRoomActor.IsValid())
-			{
-				return;
-			}
-
-			UWorld* World = WeakRoomActor->GetWorld();
+			UWorld* World = WeakRoomActor.IsValid()
+				? WeakRoomActor->GetWorld()
+				: nullptr;
 			UClass* EnemyClass = LoadClass<AActor>(
 				nullptr,
 				TEXT("/Game/MyContent/Enemigos/Enemigo_Base/BP_EnemigoBasse.BP_EnemigoBasse_C"));
@@ -2659,11 +2602,8 @@ bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 			UClass* CentaurArcherClass = LoadClass<AActor>(
 				nullptr,
 				TEXT("/Game/MyContent/Enemigos/Arquero/BP_Enemigo_ArqueroCentauro.BP_Enemigo_ArqueroCentauro_C"));
-			if (!World || !EnemyClass)
+			if (World && EnemyClass)
 			{
-				return;
-			}
-
 			// At most one tank per room. Keeping the chance at 30% makes it a
 			// noticeable encounter without replacing the regular enemy roster.
 			const int32 ArcherSlot = CentaurArcherClass && FMath::FRand() <= 0.40f
@@ -2720,6 +2660,7 @@ bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 					WeakRoomActor,
 					NpcWorldTransform);
 			}
+			}
 		}),
 			1.0f,
 			false);
@@ -2749,8 +2690,8 @@ bool UProceduralRoomBlueprintLibrary::PrepareRandomRoom(AActor* RoomActor)
 				false);
 		}
 	}
-
-	return true;
+	}
+	return bRoomPrepared;
 }
 
 bool UProceduralRoomBlueprintLibrary::ValidateGeneratedRoom(
@@ -2762,16 +2703,18 @@ bool UProceduralRoomBlueprintLibrary::ValidateGeneratedRoom(
 	ReachableTiles = 0;
 	WalkableTiles = 0;
 	ValidationMessage = TEXT("No se ha proporcionado una sala valida.");
-	if (!IsValid(RoomActor) || !RoomActor->GetWorld())
+	bool bRoomPlayable = false;
+	UWorld* World = IsValid(RoomActor) ? RoomActor->GetWorld() : nullptr;
+	if (!World)
 	{
 		UE_LOG(
 			LogTemp,
 			Error,
 			TEXT("[VALIDACION SALA] %s"),
 			*ValidationMessage);
-		return false;
 	}
-
+	else
+	{
 	int32 RoomSeed = FMath::RoundToInt(
 		ProceduralRoom::ReadNumber(RoomActor, TEXT("RoomSeed"), 0.0));
 	if (RoomSeed == 0)
@@ -2783,9 +2726,9 @@ bool UProceduralRoomBlueprintLibrary::ValidateGeneratedRoom(
 			Error,
 			TEXT("[VALIDACION SALA] %s"),
 			*ValidationMessage);
-		return false;
 	}
-
+	else
+	{
 	const ProceduralRoom::FRoomConfig Config =
 		ProceduralRoom::ReadConfig(RoomActor);
 	const ProceduralRoom::FRoomLayout Layout =
@@ -2796,39 +2739,33 @@ bool UProceduralRoomBlueprintLibrary::ValidateGeneratedRoom(
 		-0.5 * static_cast<double>(Layout.TilesY - 1) * Config.TileSize;
 
 	TSet<FIntPoint> BlockingCells;
-	for (TActorIterator<AActor> ActorIt(RoomActor->GetWorld()); ActorIt; ++ActorIt)
+	for (TActorIterator<AActor> ActorIt(World); ActorIt; ++ActorIt)
 	{
 		AActor* GeneratedProp = *ActorIt;
-		if (!IsValid(GeneratedProp) ||
-			!GeneratedProp->ActorHasTag(ProceduralRoom::ProceduralPropTag))
+		if (IsValid(GeneratedProp) &&
+			GeneratedProp->ActorHasTag(ProceduralRoom::ProceduralPropTag))
 		{
-			continue;
-		}
-
-		TInlineComponentArray<UBoxComponent*> BlockingBoxes(GeneratedProp);
-		const bool bBlocksPawn = BlockingBoxes.ContainsByPredicate(
-			[](const UBoxComponent* Box)
+			TInlineComponentArray<UBoxComponent*> BlockingBoxes(GeneratedProp);
+			const bool bBlocksPawn = BlockingBoxes.ContainsByPredicate(
+				[](const UBoxComponent* Box)
+				{
+					return IsValid(Box) &&
+						Box->GetCollisionEnabled() != ECollisionEnabled::NoCollision &&
+						Box->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block;
+				});
+			if (bBlocksPawn)
 			{
-				return IsValid(Box) &&
-					Box->GetCollisionEnabled() !=
-						ECollisionEnabled::NoCollision &&
-					Box->GetCollisionResponseToChannel(ECC_Pawn) ==
-						ECR_Block;
-			});
-		if (!bBlocksPawn)
-		{
-			continue;
-		}
-
-		const FVector LocalPosition =
-			RoomActor->GetActorTransform().InverseTransformPosition(
-				GeneratedProp->GetActorLocation());
-		const FIntPoint Cell(
-			FMath::RoundToInt((LocalPosition.X - OriginX) / Config.TileSize),
-			FMath::RoundToInt((LocalPosition.Y - OriginY) / Config.TileSize));
-		if (Layout.CellSet.Contains(Cell))
-		{
-			BlockingCells.Add(Cell);
+				const FVector LocalPosition =
+					RoomActor->GetActorTransform().InverseTransformPosition(
+						GeneratedProp->GetActorLocation());
+				const FIntPoint Cell(
+					FMath::RoundToInt((LocalPosition.X - OriginX) / Config.TileSize),
+					FMath::RoundToInt((LocalPosition.Y - OriginY) / Config.TileSize));
+				if (Layout.CellSet.Contains(Cell))
+				{
+					BlockingCells.Add(Cell);
+				}
+			}
 		}
 	}
 
@@ -2853,7 +2790,10 @@ bool UProceduralRoomBlueprintLibrary::ValidateGeneratedRoom(
 			TEXT("[VALIDACION SALA] Verificacion solicitada: %s"),
 			*ValidationMessage);
 	}
-	return Result.bPlayable;
+	bRoomPlayable = Result.bPlayable;
+	}
+	}
+	return bRoomPlayable;
 }
 
 #undef LOCTEXT_NAMESPACE

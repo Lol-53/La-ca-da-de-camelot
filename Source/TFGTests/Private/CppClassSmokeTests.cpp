@@ -36,16 +36,15 @@ void FTFGCppClassSmokeTest::GetTests(
 bool FTFGCppClassSmokeTest::RunTest(const FString& Parameters)
 {
 	UClass* Class = FindObject<UClass>(nullptr, *Parameters);
-	if (!TestNotNull(TEXT("La clase C++ reflejada existe"), Class))
+	const bool bClassExists = TestNotNull(TEXT("La clase C++ reflejada existe"), Class);
+	if (bClassExists)
 	{
-		return false;
+		TestTrue(TEXT("Pertenece al modulo TFG"), TFGCppTestHelpers::IsTFGRuntimeClass(Class));
+		TestNotNull(TEXT("La clase tiene clase padre"), Class->GetSuperClass());
+		TestNotNull(TEXT("El objeto por defecto se puede construir"), Class->GetDefaultObject());
+		TestFalse(TEXT("La clase no esta marcada como obsoleta"), Class->HasAnyClassFlags(CLASS_Deprecated));
 	}
-
-	TestTrue(TEXT("Pertenece al modulo TFG"), TFGCppTestHelpers::IsTFGRuntimeClass(Class));
-	TestNotNull(TEXT("La clase tiene clase padre"), Class->GetSuperClass());
-	TestNotNull(TEXT("El objeto por defecto se puede construir"), Class->GetDefaultObject());
-	TestFalse(TEXT("La clase no esta marcada como obsoleta"), Class->HasAnyClassFlags(CLASS_Deprecated));
-	return true;
+	return bClassExists;
 }
 
 #endif

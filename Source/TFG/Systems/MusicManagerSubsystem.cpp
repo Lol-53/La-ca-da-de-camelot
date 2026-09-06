@@ -137,20 +137,21 @@ UMusicManagerSubsystem::EMapMusicContext
 UMusicManagerSubsystem::ResolveContext(const UWorld* World) const
 {
 	const FString MapName = World ? World->GetMapName() : FString();
+	EMapMusicContext Context = EMapMusicContext::Run;
 	if (MapName.Contains(TEXT("Menu_Principal"), ESearchCase::IgnoreCase))
 	{
-		return EMapMusicContext::MainMenu;
+		Context = EMapMusicContext::MainMenu;
 	}
-	if (MapName.Contains(TEXT("Lobby_MesaRedonda"), ESearchCase::IgnoreCase) ||
+	else if (MapName.Contains(TEXT("Lobby_MesaRedonda"), ESearchCase::IgnoreCase) ||
 		MapName.Contains(TEXT("Lobby_Mesa_Redonda"), ESearchCase::IgnoreCase))
 	{
-		return EMapMusicContext::RoundTable;
+		Context = EMapMusicContext::RoundTable;
 	}
-	if (MapName.Contains(TEXT("Mordred"), ESearchCase::IgnoreCase))
+	else if (MapName.Contains(TEXT("Mordred"), ESearchCase::IgnoreCase))
 	{
-		return EMapMusicContext::Mordred;
+		Context = EMapMusicContext::Mordred;
 	}
-	return EMapMusicContext::Run;
+	return Context;
 }
 
 void UMusicManagerSubsystem::BuildComponentsForContext(const EMapMusicContext NewContext)
@@ -191,39 +192,36 @@ void UMusicManagerSubsystem::CreateAndStartAmbient(USoundBase* Sound)
 UAudioComponent* UMusicManagerSubsystem::CreateMusicComponent(USoundBase* Sound) const
 {
 	UWorld* World = ActiveWorld.Get();
+	UAudioComponent* Component = nullptr;
 	if (!World || !Sound)
 	{
 		UE_LOG(LogMusicManager, Warning,
 			TEXT("[MUSICA] No se pudo crear una pista: mundo o sonido invalido."));
-		return nullptr;
 	}
-
-	UAudioComponent* Component = UGameplayStatics::CreateSound2D(
-		World, Sound, 1.0f, 1.0f, 0.0f, nullptr, false, false);
-	if (Component)
+	else
 	{
-		Component->bAutoDestroy = false;
-		// FadeIn/AdjustVolume use the component's internal fader. Keeping the
-		// base multiplier at zero would mute that fader at every value.
-		Component->SetVolumeMultiplier(1.0f);
+		Component = UGameplayStatics::CreateSound2D(
+			World, Sound, 1.0f, 1.0f, 0.0f, nullptr, false, false);
+		if (Component)
+		{
+			Component->bAutoDestroy = false;
+			// FadeIn/AdjustVolume use the component's internal fader. Keeping the
+			// base multiplier at zero would mute that fader at every value.
+			Component->SetVolumeMultiplier(1.0f);
+		}
 	}
 	return Component;
 }
 
 void UMusicManagerSubsystem::SetCombatMusicDesired(const bool bDesired)
 {
-	if (bCombatMusicActive == bDesired || !CombatComponent || !AmbientComponent)
+	const bool bCanChangeMusic = bCombatMusicActive != bDesired &&
+		CombatComponent && AmbientComponent && ActiveWorld.IsValid();
+	if (bCanChangeMusic)
 	{
-		return;
-	}
-	bCombatMusicActive = bDesired;
-
-	UWorld* World = ActiveWorld.Get();
-	if (!World)
-	{
-		return;
-	}
-	World->GetTimerManager().ClearTimer(PauseAfterFadeTimer);
+		bCombatMusicActive = bDesired;
+		UWorld* World = ActiveWorld.Get();
+		World->GetTimerManager().ClearTimer(PauseAfterFadeTimer);
 
 	UAudioComponent* Incoming = bDesired ? CombatComponent.Get() : AmbientComponent.Get();
 	UAudioComponent* Outgoing = bDesired ? AmbientComponent.Get() : CombatComponent.Get();
@@ -248,9 +246,10 @@ void UMusicManagerSubsystem::SetCombatMusicDesired(const bool bDesired)
 	World->GetTimerManager().SetTimer(
 		PauseAfterFadeTimer, PauseDelegate, FadeDuration + 0.03f, false);
 
-	UE_LOG(LogMusicManager, Display,
+		UE_LOG(LogMusicManager, Display,
 		TEXT("[MUSICA] Transicion %.2f s -> %s; la pista saliente conservara su posicion."),
-		FadeDuration, bDesired ? TEXT("COMBATE") : TEXT("AMBIENTE"));
+			FadeDuration, bDesired ? TEXT("COMBATE") : TEXT("AMBIENTE"));
+	}
 }
 
 void UMusicManagerSubsystem::EnsureDesiredTrackPlaying(const bool bWantsCombat)
@@ -290,12 +289,12 @@ void UMusicManagerSubsystem::EnsureDesiredTrackPlaying(const bool bWantsCombat)
 float UMusicManagerSubsystem::GetTargetVolumeForComponent(
 	const UAudioComponent* Component) const
 {
-	if (ActiveContext == EMapMusicContext::Mordred &&
-		Component && Component == CombatComponent.Get())
-	{
-		return MusicVolume * MordredVolumeMultiplier;
-	}
-	return MusicVolume;
+	const bool bEsCombateMordred = ActiveContext == EMapMusicContext::Mordred &&
+		Component && Component == CombatComponent.Get();
+	const float TargetVolume = bEsCombateMordred
+		? MusicVolume * MordredVolumeMultiplier
+		: MusicVolume;
+	return TargetVolume;
 }
 
 void UMusicManagerSubsystem::PauseAfterFade(

@@ -40,31 +40,32 @@ namespace MordredBossHelpers
 	static void InvokeText(UObject* Target, const FName FunctionName, const FString& Value)
 	{
 		UFunction* Function = Target ? Target->FindFunction(FunctionName) : nullptr;
-		if (!Function)
+		if (Function)
 		{
-			return;
-		}
-
-		uint8* Params = static_cast<uint8*>(FMemory_Alloca(Function->ParmsSize));
-		FMemory::Memzero(Params, Function->ParmsSize);
-		for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
-		{
-			FProperty* Property = *It;
-			if (Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
+			uint8* Params = static_cast<uint8*>(FMemory_Alloca(Function->ParmsSize));
+			FMemory::Memzero(Params, Function->ParmsSize);
+			bool bInvoked = false;
+			for (TFieldIterator<FProperty> It(Function);
+				It && It->HasAnyPropertyFlags(CPF_Parm) && !bInvoked; ++It)
 			{
-				continue;
-			}
-			if (FStrProperty* StringProperty = CastField<FStrProperty>(Property))
-			{
-				StringProperty->SetPropertyValue_InContainer(Params, Value);
-				Target->ProcessEvent(Function, Params);
-				return;
-			}
-			if (FTextProperty* TextProperty = CastField<FTextProperty>(Property))
-			{
-				TextProperty->SetPropertyValue_InContainer(Params, FText::FromString(Value));
-				Target->ProcessEvent(Function, Params);
-				return;
+				FProperty* Property = *It;
+				if (!Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
+				{
+					if (FStrProperty* StringProperty = CastField<FStrProperty>(Property))
+					{
+						StringProperty->SetPropertyValue_InContainer(Params, Value);
+						bInvoked = true;
+					}
+					else if (FTextProperty* TextProperty = CastField<FTextProperty>(Property))
+					{
+						TextProperty->SetPropertyValue_InContainer(Params, FText::FromString(Value));
+						bInvoked = true;
+					}
+					if (bInvoked)
+					{
+						Target->ProcessEvent(Function, Params);
+					}
+				}
 			}
 		}
 	}
@@ -82,36 +83,35 @@ namespace MordredBossHelpers
 	static bool InvokeNumeric(UObject* Target, const FName FunctionName, const float Value)
 	{
 		UFunction* Function = Target ? Target->FindFunction(FunctionName) : nullptr;
-		if (!Function)
+		bool bInvoked = false;
+		if (Function)
 		{
-			return false;
-		}
-
-		uint8* Params = static_cast<uint8*>(FMemory_Alloca(Function->ParmsSize));
-		FMemory::Memzero(Params, Function->ParmsSize);
-		for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
-		{
-			FProperty* Property = *It;
-			if (Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
+			uint8* Params = static_cast<uint8*>(FMemory_Alloca(Function->ParmsSize));
+			FMemory::Memzero(Params, Function->ParmsSize);
+			for (TFieldIterator<FProperty> It(Function);
+				It && It->HasAnyPropertyFlags(CPF_Parm) && !bInvoked; ++It)
 			{
-				continue;
-			}
-			if (FNumericProperty* Numeric = CastField<FNumericProperty>(Property))
-			{
-				void* Address = Numeric->ContainerPtrToValuePtr<void>(Params);
-				if (Numeric->IsFloatingPoint())
+				FProperty* Property = *It;
+				if (!Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
 				{
-					Numeric->SetFloatingPointPropertyValue(Address, Value);
+					if (FNumericProperty* Numeric = CastField<FNumericProperty>(Property))
+					{
+						void* Address = Numeric->ContainerPtrToValuePtr<void>(Params);
+						if (Numeric->IsFloatingPoint())
+						{
+							Numeric->SetFloatingPointPropertyValue(Address, Value);
+						}
+						else
+						{
+							Numeric->SetIntPropertyValue(Address, FMath::RoundToInt64(Value));
+						}
+						Target->ProcessEvent(Function, Params);
+						bInvoked = true;
+					}
 				}
-				else
-				{
-					Numeric->SetIntPropertyValue(Address, FMath::RoundToInt64(Value));
-				}
-				Target->ProcessEvent(Function, Params);
-				return true;
 			}
 		}
-		return false;
+		return bInvoked;
 	}
 }
 
@@ -362,27 +362,24 @@ void AFinalBossMordred::AdvanceIntroDialogue()
 	if (bVictoryDialogueActive)
 	{
 		AdvanceVictoryDialogue();
-		return;
 	}
-	if (!bIntroActive)
+	else if (bIntroActive)
 	{
-		return;
-	}
-
-	++DialogueIndex;
-	if (ActiveIntroDialogue.IsValidIndex(DialogueIndex))
-	{
-		ShowDialogueLine(ActiveIntroDialogue[DialogueIndex]);
-		UE_LOG(
-			LogMordredBoss,
-			Display,
-			TEXT("[MORDRED] Linea de dialogo %d/%d. Esperando pulsacion de E."),
-			DialogueIndex + 1,
-			ActiveIntroDialogue.Num());
-	}
-	else
-	{
-		FinishIntroDialogue();
+		++DialogueIndex;
+		if (ActiveIntroDialogue.IsValidIndex(DialogueIndex))
+		{
+			ShowDialogueLine(ActiveIntroDialogue[DialogueIndex]);
+			UE_LOG(
+				LogMordredBoss,
+				Display,
+				TEXT("[MORDRED] Linea de dialogo %d/%d. Esperando pulsacion de E."),
+				DialogueIndex + 1,
+				ActiveIntroDialogue.Num());
+		}
+		else
+		{
+			FinishIntroDialogue();
+		}
 	}
 }
 
@@ -510,17 +507,12 @@ void AFinalBossMordred::FinishIntroDialogue()
 
 void AFinalBossMordred::BindDialogueInput()
 {
-	if (bDialogueInputBound)
+	if (!bDialogueInputBound)
 	{
-		return;
-	}
-
-	APlayerController* PlayerController =
-		UGameplayStatics::GetPlayerController(this, 0);
-	if (!PlayerController)
-	{
-		return;
-	}
+		APlayerController* PlayerController =
+			UGameplayStatics::GetPlayerController(this, 0);
+		if (PlayerController)
+		{
 
 	if (!DialogueInputComponent)
 	{
@@ -536,12 +528,14 @@ void AFinalBossMordred::BindDialogueInput()
 			&AFinalBossMordred::AdvanceIntroDialogue);
 	}
 
-	PlayerController->PushInputComponent(DialogueInputComponent);
-	bDialogueInputBound = true;
-	UE_LOG(
-		LogMordredBoss,
-		Display,
-		TEXT("[MORDRED] Entrada manual E preparada para el dialogo final."));
+			PlayerController->PushInputComponent(DialogueInputComponent);
+			bDialogueInputBound = true;
+			UE_LOG(
+				LogMordredBoss,
+				Display,
+				TEXT("[MORDRED] Entrada manual E preparada para el dialogo final."));
+		}
+	}
 }
 
 void AFinalBossMordred::UnbindDialogueInput()
@@ -584,6 +578,7 @@ TArray<FString> AFinalBossMordred::SelectDialoguePackage(
 	const TArray<FNPCDialoguePackage>& Packages,
 	const TCHAR* DialoguePhase) const
 {
+	TArray<FString> SelectedLines;
 	TArray<int32> ValidPackageIndices;
 	for (int32 PackageIndex = 0; PackageIndex < Packages.Num(); ++PackageIndex)
 	{
@@ -600,21 +595,23 @@ TArray<FString> AFinalBossMordred::SelectDialoguePackage(
 			Warning,
 			TEXT("[MORDRED] No hay paquetes validos para el dialogo de %s."),
 			DialoguePhase);
-		return {};
 	}
-
-	const int32 SelectedIndex =
-		ValidPackageIndices[FMath::RandHelper(ValidPackageIndices.Num())];
-	const FNPCDialoguePackage& SelectedPackage = Packages[SelectedIndex];
-	UE_LOG(
-		LogMordredBoss,
-		Display,
-		TEXT("[MORDRED] Paquete de %s seleccionado: '%s' (%d frases de %d paquetes)."),
-		DialoguePhase,
-		*SelectedPackage.NombrePaquete.ToString(),
-		SelectedPackage.Lineas.Num(),
-		ValidPackageIndices.Num());
-	return SelectedPackage.Lineas;
+	else
+	{
+		const int32 SelectedIndex =
+			ValidPackageIndices[FMath::RandHelper(ValidPackageIndices.Num())];
+		const FNPCDialoguePackage& SelectedPackage = Packages[SelectedIndex];
+		SelectedLines = SelectedPackage.Lineas;
+		UE_LOG(
+			LogMordredBoss,
+			Display,
+			TEXT("[MORDRED] Paquete de %s seleccionado: '%s' (%d frases de %d paquetes)."),
+			DialoguePhase,
+			*SelectedPackage.NombrePaquete.ToString(),
+			SelectedPackage.Lineas.Num(),
+			ValidPackageIndices.Num());
+	}
+	return SelectedLines;
 }
 
 void AFinalBossMordred::ShowMordredDialogueName()
@@ -748,17 +745,13 @@ void AFinalBossMordred::ResolveMeleeImpact(const bool bKick)
 		bKick ? 0.78f : 0.9f,
 		bKick ? TEXT("patada") : TEXT("espada"));
 	ACharacter* Player = ResolvePlayerCharacter();
-	if (!Player)
+	if (Player)
 	{
-		return;
-	}
-
-	const FVector ToPlayer = Player->GetActorLocation() - GetActorLocation();
-	if (ToPlayer.Size2D() > 285.0f ||
-		FVector::DotProduct(GetActorForwardVector(), ToPlayer.GetSafeNormal2D()) < 0.15f)
-	{
-		return;
-	}
+		const FVector ToPlayer = Player->GetActorLocation() - GetActorLocation();
+		const bool bInsideMeleeArc = ToPlayer.Size2D() <= 285.0f &&
+			FVector::DotProduct(GetActorForwardVector(), ToPlayer.GetSafeNormal2D()) >= 0.15f;
+		if (bInsideMeleeArc)
+		{
 
 	const FVector Direction = ToPlayer.GetSafeNormal2D();
 	const FVector Launch = bKick
@@ -771,7 +764,9 @@ void AFinalBossMordred::ResolveMeleeImpact(const bool bKick)
 		Display,
 		TEXT("[MORDRED] %s impacto al jugador por %.1f."),
 		bKick ? TEXT("Patada") : TEXT("Espada"),
-		bKick ? KickDamage : SwordDamage);
+			bKick ? KickDamage : SwordDamage);
+		}
+	}
 }
 
 void AFinalBossMordred::PerformDash()
@@ -924,11 +919,16 @@ void AFinalBossMordred::UnlockAction()
 
 ACharacter* AFinalBossMordred::ResolvePlayerCharacter() const
 {
+	ACharacter* Player = nullptr;
 	if (CachedPlayer.IsValid())
 	{
-		return CachedPlayer.Get();
+		Player = CachedPlayer.Get();
 	}
-	return Cast<ACharacter>(UGameplayStatics::GetPlayerCharacter(this, 0));
+	else
+	{
+		Player = Cast<ACharacter>(UGameplayStatics::GetPlayerCharacter(this, 0));
+	}
+	return Player;
 }
 
 void AFinalBossMordred::FacePlayerInstantly()
@@ -1122,23 +1122,25 @@ void AMordredBossAIController::Tick(const float DeltaSeconds)
 	{
 		StopMovement();
 		ClearFocus(EAIFocusPriority::Gameplay);
-		return;
-	}
-
-	SetFocus(Player);
-	if (Boss->EstaEjecutandoAccion())
-	{
-		StopMovement();
-		return;
-	}
-
-	const float Distance = FVector::Dist2D(Boss->GetActorLocation(), Player->GetActorLocation());
-	if (Distance > 235.0f)
-	{
-		MoveToActor(Player, 205.0f, true, true, true, nullptr, true);
 	}
 	else
 	{
-		StopMovement();
+		SetFocus(Player);
+		if (Boss->EstaEjecutandoAccion())
+		{
+			StopMovement();
+		}
+		else
+		{
+			const float Distance = FVector::Dist2D(Boss->GetActorLocation(), Player->GetActorLocation());
+			if (Distance > 235.0f)
+			{
+				MoveToActor(Player, 205.0f, true, true, true, nullptr, true);
+			}
+			else
+			{
+				StopMovement();
+			}
+		}
 	}
 }

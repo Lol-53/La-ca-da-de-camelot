@@ -32,24 +32,17 @@ void AMainMenuManager::BeginPlay()
 	Super::BeginPlay();
 
 	APlayerController* Controller = UGameplayStatics::GetPlayerController(this, 0);
-	if (!Controller)
+	if (Controller)
 	{
-		UE_LOG(LogMainMenu, Error, TEXT("[MENU PRINCIPAL] No se encontro PlayerController."));
-		return;
-	}
+		if (APawn* Pawn = Controller->GetPawn())
+		{
+			Pawn->SetActorHiddenInGame(true);
+			Pawn->DisableInput(Controller);
+		}
 
-	if (APawn* Pawn = Controller->GetPawn())
-	{
-		Pawn->SetActorHiddenInGame(true);
-		Pawn->DisableInput(Controller);
-	}
-
-	MenuWidget = CreateWidget<UMainMenuWidget>(Controller, UMainMenuWidget::StaticClass());
-	if (!MenuWidget)
-	{
-		UE_LOG(LogMainMenu, Error, TEXT("[MENU PRINCIPAL] No se pudo crear la interfaz."));
-		return;
-	}
+		MenuWidget = CreateWidget<UMainMenuWidget>(Controller, UMainMenuWidget::StaticClass());
+		if (MenuWidget)
+		{
 
 	// This is the authored project background and deliberately takes priority
 	// over the legacy T_MainMenu_Camelot override stored in the placed actor.
@@ -68,7 +61,17 @@ void AMainMenuManager::BeginPlay()
 	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 	Controller->SetInputMode(InputMode);
 
-	UE_LOG(LogMainMenu, Display, TEXT("[MENU PRINCIPAL] Interfaz inicial abierta."));
+			UE_LOG(LogMainMenu, Display, TEXT("[MENU PRINCIPAL] Interfaz inicial abierta."));
+		}
+		else
+		{
+			UE_LOG(LogMainMenu, Error, TEXT("[MENU PRINCIPAL] No se pudo crear la interfaz."));
+		}
+	}
+	else
+	{
+		UE_LOG(LogMainMenu, Error, TEXT("[MENU PRINCIPAL] No se encontro PlayerController."));
+	}
 }
 
 void AMainMenuManager::StartSaveSlot(const int32 SlotIndex)

@@ -123,16 +123,18 @@ void UPermanentUpgradeWidget::AddUpgradeRow(UVerticalBox* Parent, const EPermane
 
 FText UPermanentUpgradeWidget::GetUpgradeDescription(const EPermanentUpgradeType Type) const
 {
+	FText Description;
 	switch (Type)
 	{
-	case EPermanentUpgradeType::Danyo: return FText::FromString(TEXT("DANO  +5% por nivel"));
-	case EPermanentUpgradeType::Velocidad: return FText::FromString(TEXT("VELOCIDAD  +3% por nivel"));
-	case EPermanentUpgradeType::Vida: return FText::FromString(TEXT("VIDA MAXIMA  +10 por nivel"));
-	case EPermanentUpgradeType::Mana: return FText::FromString(TEXT("MANA MAXIMO  +10 por nivel"));
-	case EPermanentUpgradeType::RegeneracionVida: return FText::FromString(TEXT("REGENERACION  +2 vida por segundo"));
-	case EPermanentUpgradeType::Resurreccion: return FText::FromString(TEXT("RESURRECCION  una vez por partida"));
-	default: return FText::GetEmpty();
+	case EPermanentUpgradeType::Danyo: Description = FText::FromString(TEXT("DANO  +5% por nivel")); break;
+	case EPermanentUpgradeType::Velocidad: Description = FText::FromString(TEXT("VELOCIDAD  +3% por nivel")); break;
+	case EPermanentUpgradeType::Vida: Description = FText::FromString(TEXT("VIDA MAXIMA  +10 por nivel")); break;
+	case EPermanentUpgradeType::Mana: Description = FText::FromString(TEXT("MANA MAXIMO  +10 por nivel")); break;
+	case EPermanentUpgradeType::RegeneracionVida: Description = FText::FromString(TEXT("REGENERACION  +2 vida por segundo")); break;
+	case EPermanentUpgradeType::Resurreccion: Description = FText::FromString(TEXT("RESURRECCION  una vez por partida")); break;
+	default: Description = FText::GetEmpty(); break;
 	}
+	return Description;
 }
 
 void UPermanentUpgradeWidget::RefreshInterface()

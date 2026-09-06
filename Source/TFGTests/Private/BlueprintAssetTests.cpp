@@ -49,20 +49,20 @@ void FTFGBlueprintLoadTest::GetTests(
 bool FTFGBlueprintLoadTest::RunTest(const FString& Parameters)
 {
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *Parameters);
-	if (!TestNotNull(*FString::Printf(TEXT("Se puede cargar %s"), *Parameters), Blueprint))
+	const bool bBlueprintLoaded = TestNotNull(
+		*FString::Printf(TEXT("Se puede cargar %s"), *Parameters), Blueprint);
+	if (bBlueprintLoaded)
 	{
-		return false;
+		TestNotNull(TEXT("Tiene una clase padre valida"), Blueprint->ParentClass.Get());
+		TestNotNull(TEXT("Tiene SkeletonGeneratedClass"), Blueprint->SkeletonGeneratedClass.Get());
+		TestNotNull(TEXT("Tiene GeneratedClass"), Blueprint->GeneratedClass.Get());
+		TestTrue(TEXT("No estaba guardado con errores de compilacion"), Blueprint->Status != BS_Error);
+		if (Blueprint->GeneratedClass)
+		{
+			TestNotNull(TEXT("La clase generada construye su CDO"), Blueprint->GeneratedClass->GetDefaultObject());
+		}
 	}
-
-	TestNotNull(TEXT("Tiene una clase padre valida"), Blueprint->ParentClass.Get());
-	TestNotNull(TEXT("Tiene SkeletonGeneratedClass"), Blueprint->SkeletonGeneratedClass.Get());
-	TestNotNull(TEXT("Tiene GeneratedClass"), Blueprint->GeneratedClass.Get());
-	TestTrue(TEXT("No estaba guardado con errores de compilacion"), Blueprint->Status != BS_Error);
-	if (Blueprint->GeneratedClass)
-	{
-		TestNotNull(TEXT("La clase generada construye su CDO"), Blueprint->GeneratedClass->GetDefaultObject());
-	}
-	return true;
+	return bBlueprintLoaded;
 }
 
 IMPLEMENT_COMPLEX_AUTOMATION_TEST(
@@ -86,17 +86,18 @@ void FTFGBlueprintCompileTest::GetTests(
 bool FTFGBlueprintCompileTest::RunTest(const FString& Parameters)
 {
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *Parameters);
-	if (!TestNotNull(*FString::Printf(TEXT("Se puede cargar %s"), *Parameters), Blueprint))
+	bool bCompiled = TestNotNull(
+		*FString::Printf(TEXT("Se puede cargar %s"), *Parameters), Blueprint);
+	if (bCompiled)
 	{
-		return false;
+		FKismetEditorUtilities::CompileBlueprint(
+			Blueprint,
+			EBlueprintCompileOptions::SkipGarbageCollection);
+		TestTrue(*FString::Printf(TEXT("%s compila sin errores"), *Parameters), Blueprint->Status != BS_Error);
+		TestNotNull(TEXT("La compilacion produce GeneratedClass"), Blueprint->GeneratedClass.Get());
+		bCompiled = Blueprint->Status != BS_Error && Blueprint->GeneratedClass != nullptr;
 	}
-
-	FKismetEditorUtilities::CompileBlueprint(
-		Blueprint,
-		EBlueprintCompileOptions::SkipGarbageCollection);
-	TestTrue(*FString::Printf(TEXT("%s compila sin errores"), *Parameters), Blueprint->Status != BS_Error);
-	TestNotNull(TEXT("La compilacion produce GeneratedClass"), Blueprint->GeneratedClass.Get());
-	return Blueprint->Status != BS_Error && Blueprint->GeneratedClass != nullptr;
+	return bCompiled;
 }
 
 #endif

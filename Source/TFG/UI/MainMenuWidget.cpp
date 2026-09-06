@@ -489,30 +489,32 @@ void UMainMenuWidget::RequestDeleteSlot(const int32 SlotIndex)
 {
 	URunPowerPersistenceSubsystem* Persistence = Manager.IsValid() && Manager->GetGameInstance()
 		? Manager->GetGameInstance()->GetSubsystem<URunPowerPersistenceSubsystem>() : nullptr;
-	if (!Persistence || !Persistence->DoesSaveSlotExist(SlotIndex))
+	if (Persistence && Persistence->DoesSaveSlotExist(SlotIndex))
+	{
+		if (PendingDeleteSlot != SlotIndex)
+		{
+			PendingDeleteSlot = SlotIndex;
+			RefreshSaveSlots();
+		}
+		else
+		{
+			const bool bDeleted = Persistence->DeleteSaveSlot(SlotIndex);
+			PendingDeleteSlot = 0;
+			RefreshSaveSlots();
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(
+					-1, 4.0f,
+					bDeleted ? FColor::Green : FColor::Red,
+					FString::Printf(TEXT("Partida %d: %s"), SlotIndex,
+						bDeleted ? TEXT("datos eliminados") : TEXT("no se pudo eliminar")));
+			}
+		}
+	}
+	else
 	{
 		PendingDeleteSlot = 0;
 		RefreshSaveSlots();
-		return;
-	}
-
-	if (PendingDeleteSlot != SlotIndex)
-	{
-		PendingDeleteSlot = SlotIndex;
-		RefreshSaveSlots();
-		return;
-	}
-
-	const bool bDeleted = Persistence->DeleteSaveSlot(SlotIndex);
-	PendingDeleteSlot = 0;
-	RefreshSaveSlots();
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			-1, 4.0f,
-			bDeleted ? FColor::Green : FColor::Red,
-			FString::Printf(TEXT("Partida %d: %s"), SlotIndex,
-				bDeleted ? TEXT("datos eliminados") : TEXT("no se pudo eliminar")));
 	}
 }
 void UMainMenuWidget::QuitGame() { if (Manager.IsValid()) Manager->QuitGame(); }

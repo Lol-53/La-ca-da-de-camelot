@@ -171,17 +171,20 @@ FReply UPauseMenuWidget::NativeOnKeyDown(
 	const FGeometry& InGeometry,
 	const FKeyEvent& InKeyEvent)
 {
+	FReply Reply = Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 	if (InKeyEvent.GetKey() == EKeys::Escape && OwnerComponent.IsValid())
 	{
 		if (PageSwitcher && PageSwitcher->GetActiveWidgetIndex() != 0)
 		{
 			ShowMainMenu();
-			return FReply::Handled();
 		}
-		OwnerComponent->ClosePauseMenu();
-		return FReply::Handled();
+		else
+		{
+			OwnerComponent->ClosePauseMenu();
+		}
+		Reply = FReply::Handled();
 	}
-	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
+	return Reply;
 }
 
 void UPauseMenuWidget::BuildInterface()

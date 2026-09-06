@@ -26,30 +26,30 @@ void FTFGCppSourceIntegrityTest::GetTests(
 	const FString SourceRoot = FPaths::Combine(FPaths::ProjectDir(), TEXT("Source"));
 	for (const FString& File : SourceFiles)
 	{
-		if (File.Contains(TEXT("/TFGTests/")) || File.Contains(TEXT("\\TFGTests\\")))
+		if (!File.Contains(TEXT("/TFGTests/")) && !File.Contains(TEXT("\\TFGTests\\")))
 		{
-			continue;
+			FString RelativeFile = File;
+			FPaths::MakePathRelativeTo(RelativeFile, *SourceRoot);
+			RelativeFile.ReplaceInline(TEXT("\\"), TEXT("/"));
+			OutBeautifiedNames.Add(RelativeFile);
+			OutTestCommands.Add(File);
 		}
-		FString RelativeFile = File;
-		FPaths::MakePathRelativeTo(RelativeFile, *SourceRoot);
-		RelativeFile.ReplaceInline(TEXT("\\"), TEXT("/"));
-		OutBeautifiedNames.Add(RelativeFile);
-		OutTestCommands.Add(File);
 	}
 }
 
 bool FTFGCppSourceIntegrityTest::RunTest(const FString& Parameters)
 {
 	FString Contents;
-	if (!TestTrue(TEXT("El archivo C++ puede leerse"), FFileHelper::LoadFileToString(Contents, *Parameters)))
+	const bool bFileLoaded = TestTrue(
+		TEXT("El archivo C++ puede leerse"),
+		FFileHelper::LoadFileToString(Contents, *Parameters));
+	if (bFileLoaded)
 	{
-		return false;
+		TestFalse(TEXT("El archivo no esta vacio"), Contents.TrimStartAndEnd().IsEmpty());
+		TestFalse(TEXT("No contiene un conflicto Git sin resolver"),
+			Contents.Contains(TEXT("<<<<<<<")) || Contents.Contains(TEXT(">>>>>>>")));
 	}
-
-	TestFalse(TEXT("El archivo no esta vacio"), Contents.TrimStartAndEnd().IsEmpty());
-	TestFalse(TEXT("No contiene un conflicto Git sin resolver"),
-		Contents.Contains(TEXT("<<<<<<<")) || Contents.Contains(TEXT(">>>>>>>")));
-	return true;
+	return bFileLoaded;
 }
 
 #endif

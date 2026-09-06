@@ -129,14 +129,20 @@ namespace RoomPowerUps
 
 	static const FDescription& GetDescription(const int32 Id)
 	{
-		for (const FDescription& Description : Descriptions)
+		const FDescription* SelectedDescription = &Descriptions[0];
+		int32 DescriptionIndex = 0;
+		bool bFound = false;
+		while (DescriptionIndex < UE_ARRAY_COUNT(Descriptions) && !bFound)
 		{
+			const FDescription& Description = Descriptions[DescriptionIndex];
 			if (Description.Id == Id)
 			{
-				return Description;
+				SelectedDescription = &Description;
+				bFound = true;
 			}
+			++DescriptionIndex;
 		}
-		return Descriptions[0];
+		return *SelectedDescription;
 	}
 
 	static const TCHAR* GetNpcName(const int32 NpcIndex)
@@ -159,6 +165,7 @@ namespace RoomPowerUps
 	static bool GetNpcPowerIds(const int32 NpcIndex, TArray<int32>& OutPowerIds)
 	{
 		OutPowerIds.Reset(3);
+		bool bValidNpc = true;
 		switch (NpcIndex)
 		{
 		case 0: OutPowerIds = { 17, 6, 15 }; break; // Lanzarote
@@ -168,9 +175,9 @@ namespace RoomPowerUps
 		case 4: OutPowerIds = { 18, 19, 9 }; break; // Tristan
 		case 5: OutPowerIds = { 2, 5, 13 }; break;  // Perceval
 		case 6: OutPowerIds = { 8, 10, 11 }; break; // Bedevere
-		default: return false;
+		default: bValidNpc = false; break;
 		}
-		return true;
+		return bValidNpc;
 	}
 }
 
@@ -178,152 +185,137 @@ bool URoomPowerUpSelectionComponent::ShowSelection(
 	const int32 SelectionSeed,
 	const int32 NpcIndex)
 {
-	if (ActiveWidget || bSelectionCommitted || !GetWorld())
-	{
-		return false;
-	}
-
-	APlayerController* Controller = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+	bool bSelectionShown = false;
+	UWorld* World = !ActiveWidget && !bSelectionCommitted ? GetWorld() : nullptr;
+	APlayerController* Controller = World
+		? UGameplayStatics::GetPlayerController(World, 0)
+		: nullptr;
 	ATFGCharacter* Character = Controller
 		? Cast<ATFGCharacter>(Controller->GetPawn())
 		: nullptr;
-	if (!Controller || !Character)
+	if (World && (!Controller || !Character))
 	{
 		UE_LOG(
 			LogRoomPowerUpSelection,
 			Error,
 			TEXT("[SELECCION POWER-UP] No se encontro un ATFGCharacter controlado."));
-		return false;
 	}
-
-	TArray<int32> AllowedIds;
-	if (!RoomPowerUps::GetNpcPowerIds(NpcIndex, AllowedIds))
+	else if (World)
 	{
-		UE_LOG(
-			LogRoomPowerUpSelection,
-			Error,
-			TEXT("[SELECCION POWER-UP] Indice de NPC invalido (%d); no se mostrara una oferta sin propietario."),
-			NpcIndex);
-		return false;
-	}
-
-	TArray<int32> CandidateIds;
-	const bool bYaTienePowerActivo =
-		Character->ObtenerPowerUpActivoDeSala() != 0;
-	for (const int32 PowerId : AllowedIds)
-	{
-		if (Character->EsPowerUpActivoDeSala(PowerId) &&
-			bYaTienePowerActivo)
+		TArray<int32> AllowedIds;
+		if (!RoomPowerUps::GetNpcPowerIds(NpcIndex, AllowedIds))
 		{
-			continue;
+			UE_LOG(
+				LogRoomPowerUpSelection,
+				Error,
+				TEXT("[SELECCION POWER-UP] Indice de NPC invalido (%d); no se mostrara una oferta sin propietario."),
+				NpcIndex);
 		}
-		if (!Character->TienePowerUpDeSala(PowerId))
+		else
 		{
-			CandidateIds.Add(PowerId);
-		}
-	}
-
-	// Keep the two-card layout after revisiting a knight, but never borrow a
-	// power from another character. New powers remain first in the pool.
-	if (CandidateIds.Num() < 2)
-	{
-		for (const int32 PowerId : AllowedIds)
-		{
-			if (Character->EsPowerUpActivoDeSala(PowerId) &&
-				bYaTienePowerActivo)
+			TArray<int32> CandidateIds;
+			const bool bYaTienePowerActivo =
+				Character->ObtenerPowerUpActivoDeSala() != 0;
+			for (const int32 PowerId : AllowedIds)
 			{
-				continue;
+				const bool bPowerActivoIncompatible =
+					Character->EsPowerUpActivoDeSala(PowerId) && bYaTienePowerActivo;
+				if (!bPowerActivoIncompatible && !Character->TienePowerUpDeSala(PowerId))
+				{
+					CandidateIds.Add(PowerId);
+				}
 			}
-			CandidateIds.AddUnique(PowerId);
-		}
-	}
-	if (CandidateIds.Num() < 2)
-	{
-		UE_LOG(
-			LogRoomPowerUpSelection,
-			Warning,
-			TEXT("[SELECCION POWER-UP] %s no tiene dos poderes compatibles disponibles."),
-			RoomPowerUps::GetNpcName(NpcIndex));
-		return false;
-	}
 
-	FRandomStream Random(SelectionSeed ^ 0x50A3E11);
-	const int32 FirstIndex = Random.RandRange(0, CandidateIds.Num() - 1);
-	OptionAId = CandidateIds[FirstIndex];
-	CandidateIds.RemoveAtSwap(FirstIndex);
-	if (Character->EsPowerUpActivoDeSala(OptionAId))
-	{
-		CandidateIds.RemoveAll(
-			[Character](const int32 Id)
+			// Keep the two-card layout after revisiting a knight, but never borrow a
+			// power from another character. New powers remain first in the pool.
+			if (CandidateIds.Num() < 2)
 			{
-				return Character->EsPowerUpActivoDeSala(Id);
-			});
-	}
-	if (CandidateIds.IsEmpty())
-	{
-		for (const int32 PowerId : AllowedIds)
-		{
-			if (!Character->EsPowerUpActivoDeSala(PowerId) &&
-				PowerId != OptionAId)
+				for (const int32 PowerId : AllowedIds)
 			{
-				CandidateIds.Add(PowerId);
+					const bool bPowerActivoIncompatible =
+						Character->EsPowerUpActivoDeSala(PowerId) && bYaTienePowerActivo;
+					if (!bPowerActivoIncompatible)
+					{
+						CandidateIds.AddUnique(PowerId);
+					}
+				}
+			}
+			if (CandidateIds.Num() < 2)
+			{
+				UE_LOG(
+					LogRoomPowerUpSelection,
+					Warning,
+					TEXT("[SELECCION POWER-UP] %s no tiene dos poderes compatibles disponibles."),
+					RoomPowerUps::GetNpcName(NpcIndex));
+			}
+			else
+			{
+				FRandomStream Random(SelectionSeed ^ 0x50A3E11);
+				const int32 FirstIndex = Random.RandRange(0, CandidateIds.Num() - 1);
+				OptionAId = CandidateIds[FirstIndex];
+				CandidateIds.RemoveAtSwap(FirstIndex);
+				if (Character->EsPowerUpActivoDeSala(OptionAId))
+				{
+					CandidateIds.RemoveAll(
+						[Character](const int32 Id)
+						{
+							return Character->EsPowerUpActivoDeSala(Id);
+						});
+				}
+				if (CandidateIds.IsEmpty())
+				{
+					for (const int32 PowerId : AllowedIds)
+					{
+						if (!Character->EsPowerUpActivoDeSala(PowerId) &&
+							PowerId != OptionAId)
+						{
+							CandidateIds.Add(PowerId);
+						}
+					}
+				}
+				OptionBId = CandidateIds[Random.RandRange(0, CandidateIds.Num() - 1)];
+
+				const RoomPowerUps::FDescription& OptionA = RoomPowerUps::GetDescription(OptionAId);
+				const RoomPowerUps::FDescription& OptionB = RoomPowerUps::GetDescription(OptionBId);
+				ActiveWidget = CreateWidget<URoomPowerUpSelectionWidget>(
+					Controller, URoomPowerUpSelectionWidget::StaticClass());
+				if (!ActiveWidget)
+				{
+					UE_LOG(LogRoomPowerUpSelection, Error,
+						TEXT("[SELECCION POWER-UP] No se pudo crear la interfaz."));
+				}
+				else
+				{
+					ActiveWidget->Configure(
+						OptionAId, FText::FromString(OptionA.Title),
+						FText::FromString(OptionA.Description), OptionBId,
+						FText::FromString(OptionB.Title), FText::FromString(OptionB.Description));
+					ActiveWidget->OnPowerUpChosen.AddUObject(
+						this, &URoomPowerUpSelectionComponent::HandlePowerUpChosen);
+					ActiveWidget->AddToViewport(1000);
+					PlayerController = Controller;
+					PlayerCharacter = Character;
+					bOwnsGameInput = true;
+					Character->MovimientoDesactivado = true;
+					Controller->SetIgnoreMoveInput(true);
+					Controller->SetIgnoreLookInput(true);
+					Controller->SetShowMouseCursor(true);
+
+					FInputModeUIOnly InputMode;
+					InputMode.SetWidgetToFocus(ActiveWidget->TakeWidget());
+					InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+					Controller->SetInputMode(InputMode);
+					bSelectionShown = true;
+					UE_LOG(
+						LogRoomPowerUpSelection, Display,
+						TEXT("[SELECCION POWER-UP] %s ofrece exclusivamente: opcion A '%s' (%d), opcion B '%s' (%d). Portal bloqueado."),
+						RoomPowerUps::GetNpcName(NpcIndex), OptionA.Title, OptionAId,
+						OptionB.Title, OptionBId);
+				}
 			}
 		}
 	}
-	OptionBId = CandidateIds[Random.RandRange(0, CandidateIds.Num() - 1)];
-
-	const RoomPowerUps::FDescription& OptionA =
-		RoomPowerUps::GetDescription(OptionAId);
-	const RoomPowerUps::FDescription& OptionB =
-		RoomPowerUps::GetDescription(OptionBId);
-
-	ActiveWidget = CreateWidget<URoomPowerUpSelectionWidget>(
-		Controller,
-		URoomPowerUpSelectionWidget::StaticClass());
-	if (!ActiveWidget)
-	{
-		UE_LOG(
-			LogRoomPowerUpSelection,
-			Error,
-			TEXT("[SELECCION POWER-UP] No se pudo crear la interfaz."));
-		return false;
-	}
-
-	ActiveWidget->Configure(
-		OptionAId,
-		FText::FromString(OptionA.Title),
-		FText::FromString(OptionA.Description),
-		OptionBId,
-		FText::FromString(OptionB.Title),
-		FText::FromString(OptionB.Description));
-	ActiveWidget->OnPowerUpChosen.AddUObject(
-		this,
-		&URoomPowerUpSelectionComponent::HandlePowerUpChosen);
-	ActiveWidget->AddToViewport(1000);
-
-	PlayerController = Controller;
-	PlayerCharacter = Character;
-	bOwnsGameInput = true;
-	Character->MovimientoDesactivado = true;
-	Controller->SetIgnoreMoveInput(true);
-	Controller->SetIgnoreLookInput(true);
-	Controller->SetShowMouseCursor(true);
-
-	FInputModeUIOnly InputMode;
-	InputMode.SetWidgetToFocus(ActiveWidget->TakeWidget());
-	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-	Controller->SetInputMode(InputMode);
-
-	UE_LOG(
-		LogRoomPowerUpSelection,
-		Display,
-		TEXT("[SELECCION POWER-UP] %s ofrece exclusivamente: opcion A '%s' (%d), opcion B '%s' (%d). Portal bloqueado."),
-		RoomPowerUps::GetNpcName(NpcIndex),
-		OptionA.Title,
-		OptionAId,
-		OptionB.Title,
-		OptionBId);
-	return true;
+	return bSelectionShown;
 }
 
 void URoomPowerUpSelectionComponent::HandlePowerUpChosen(const int32 PowerUpId)

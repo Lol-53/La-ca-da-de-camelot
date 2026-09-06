@@ -22,15 +22,16 @@ int32 UMyCustomSceneToolset::CountActorsWithMesh(const FString& MeshName)
 
 FString UMyCustomSceneToolset::RunPython(const FString& Code)
 {
+	FString ExecutionResult = TEXT("Python Script Plugin is not available.");
 	if (IPythonScriptPlugin::Get() && IPythonScriptPlugin::Get()->IsPythonAvailable())
 	{
 		FPythonCommandEx PythonCommand;
 		PythonCommand.Command = Code;
 		PythonCommand.ExecutionMode = EPythonCommandExecutionMode::ExecuteFile;
 		PythonCommand.FileExecutionScope = EPythonFileExecutionScope::Public;
-		return IPythonScriptPlugin::Get()->ExecPythonCommandEx(PythonCommand)
+		ExecutionResult = IPythonScriptPlugin::Get()->ExecPythonCommandEx(PythonCommand)
 			? TEXT("Python command executed successfully. Check Output Log for details.")
 			: TEXT("Failed to execute Python command. Check Output Log for errors.");
 	}
-	return TEXT("Python Script Plugin is not available.");
+	return ExecutionResult;
 }

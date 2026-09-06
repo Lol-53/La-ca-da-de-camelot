@@ -172,23 +172,19 @@ void UPotionQuickbarWidget::SetIconTextures(
 
 void UPotionQuickbarWidget::RefreshCounts()
 {
-	if (CountTexts.Num() < 3)
+	if (CountTexts.Num() >= 3)
 	{
-		return;
+		UGameInstance* GameInstance = GetGameInstance();
+		const URunPowerPersistenceSubsystem* Persistence =
+			GameInstance ? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>() : nullptr;
+		if (Persistence)
+		{
+			CountTexts[0]->SetText(FText::FromString(
+				FString::Printf(TEXT("x %d"), Persistence->GetPotionCount(EPotionType::Vida))));
+			CountTexts[1]->SetText(FText::FromString(
+				FString::Printf(TEXT("x %d"), Persistence->GetPotionCount(EPotionType::Energia))));
+			CountTexts[2]->SetText(FText::FromString(
+				FString::Printf(TEXT("x %d"), Persistence->GetPotionCount(EPotionType::Mana))));
+		}
 	}
-
-	UGameInstance* GameInstance = GetGameInstance();
-	const URunPowerPersistenceSubsystem* Persistence =
-		GameInstance ? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>() : nullptr;
-	if (!Persistence)
-	{
-		return;
-	}
-
-	CountTexts[0]->SetText(FText::FromString(
-		FString::Printf(TEXT("x %d"), Persistence->GetPotionCount(EPotionType::Vida))));
-	CountTexts[1]->SetText(FText::FromString(
-		FString::Printf(TEXT("x %d"), Persistence->GetPotionCount(EPotionType::Energia))));
-	CountTexts[2]->SetText(FText::FromString(
-		FString::Printf(TEXT("x %d"), Persistence->GetPotionCount(EPotionType::Mana))));
 }

@@ -113,13 +113,15 @@ void UAlchemyCraftingWidget::AddRecipeRow(UVerticalBox* Parent, const EPotionTyp
 
 FText UAlchemyCraftingWidget::GetRecipeDescription(const EPotionType Type) const
 {
+	FText Description;
 	switch (Type)
 	{
-	case EPotionType::Vida: return FText::FromString(TEXT("POCION DE VIDA"));
-	case EPotionType::Mana: return FText::FromString(TEXT("POCION DE MANA"));
-	case EPotionType::Energia: return FText::FromString(TEXT("POCION DE ENERGIA"));
-	default: return FText::GetEmpty();
+	case EPotionType::Vida: Description = FText::FromString(TEXT("POCION DE VIDA")); break;
+	case EPotionType::Mana: Description = FText::FromString(TEXT("POCION DE MANA")); break;
+	case EPotionType::Energia: Description = FText::FromString(TEXT("POCION DE ENERGIA")); break;
+	default: Description = FText::GetEmpty(); break;
 	}
+	return Description;
 }
 
 void UAlchemyCraftingWidget::RefreshInterface()

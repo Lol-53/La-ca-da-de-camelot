@@ -127,17 +127,17 @@ void ACollectibleDropEnemyBase::ConfigureCentaurArcher()
 			-> USkeletalMeshComponent*
 		{
 			USkeletalMesh* PartMesh = LoadObject<USkeletalMesh>(nullptr, AssetPath);
-			if (!PartMesh)
+			USkeletalMeshComponent* Part = nullptr;
+			if (PartMesh)
 			{
-				return nullptr;
+				Part = NewObject<USkeletalMeshComponent>(this, FName(Name));
+				Part->SetupAttachment(CharacterMesh);
+				Part->SetSkeletalMeshAsset(PartMesh);
+				Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				Part->RegisterComponent();
+				Part->SetLeaderPoseComponent(CharacterMesh);
+				ArcherVisualParts.Add(Part);
 			}
-			USkeletalMeshComponent* Part = NewObject<USkeletalMeshComponent>(this, FName(Name));
-			Part->SetupAttachment(CharacterMesh);
-			Part->SetSkeletalMeshAsset(PartMesh);
-			Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Part->RegisterComponent();
-			Part->SetLeaderPoseComponent(CharacterMesh);
-			ArcherVisualParts.Add(Part);
 			return Part;
 		};
 		AddLeaderPosePart(TEXT("CentaurBodyArmor"),
@@ -170,101 +170,92 @@ void ACollectibleDropEnemyBase::ConfigureCentaurArcher()
 void ACollectibleDropEnemyBase::UpdateCentaurArcher(const float DeltaSeconds)
 {
 	USkeletalMeshComponent* CharacterMesh = GetMesh();
-	if (!CharacterMesh || !GetWorld())
+	if (CharacterMesh && GetWorld())
 	{
-		return;
-	}
-
-	AAIController* AI = Cast<AAIController>(GetController());
-	if (AI && !bArcherBrainDisabled)
-	{
-		if (UBrainComponent* Brain = AI->GetBrainComponent())
+		AAIController* AI = Cast<AAIController>(GetController());
+		if (AI && !bArcherBrainDisabled)
 		{
-			Brain->StopLogic(TEXT("Centaur archer uses native ranged combat"));
-		}
-		bArcherBrainDisabled = true;
-	}
-
-	if (IsMarkedDead())
-	{
-		if (AI)
-		{
-			AI->StopMovement();
-		}
-		if (!bArcherDeathAnimationStarted && ArcherDeathAnimation)
-		{
-			GetWorldTimerManager().ClearTimer(ArcherReleaseTimer);
-			GetWorldTimerManager().ClearTimer(ArcherShotEndTimer);
-			bArcherAttackActive = false;
-			bArcherDeathAnimationStarted = true;
-			if (ArcherNockedArrowVisual)
+			if (UBrainComponent* Brain = AI->GetBrainComponent())
 			{
-				ArcherNockedArrowVisual->SetVisibility(false, true);
+				Brain->StopLogic(TEXT("Centaur archer uses native ranged combat"));
 			}
-			CharacterMesh->PlayAnimation(ArcherDeathAnimation, false);
-			UE_LOG(LogCollectibleDropEnemy, Display,
-				TEXT("[ARQUERO] Animacion de muerte iniciada para %s."), *GetName());
+			bArcherBrainDisabled = true;
 		}
-		return;
-	}
 
-	ACharacter* Player = UGameplayStatics::GetPlayerCharacter(this, 0);
-	if (!Player)
-	{
-		return;
-	}
-
-	FVector ToPlayer = Player->GetActorLocation() - GetActorLocation();
-	ToPlayer.Z = 0.0f;
-	const float Distance = ToPlayer.Size();
-	const FVector DirectionToPlayer = ToPlayer.GetSafeNormal();
-	if (!DirectionToPlayer.IsNearlyZero())
-	{
-		SetActorRotation(FRotator(0.0f, DirectionToPlayer.Rotation().Yaw, 0.0f));
-	}
-
-	if (!bArcherAttackActive && AI)
-	{
-		if (Distance > 1750.0f)
+		if (IsMarkedDead())
 		{
-			AI->MoveToActor(Player, 1250.0f, true, true, true);
+			if (AI)
+			{
+				AI->StopMovement();
+			}
+			if (!bArcherDeathAnimationStarted && ArcherDeathAnimation)
+			{
+				GetWorldTimerManager().ClearTimer(ArcherReleaseTimer);
+				GetWorldTimerManager().ClearTimer(ArcherShotEndTimer);
+				bArcherAttackActive = false;
+				bArcherDeathAnimationStarted = true;
+				if (ArcherNockedArrowVisual)
+				{
+					ArcherNockedArrowVisual->SetVisibility(false, true);
+				}
+				CharacterMesh->PlayAnimation(ArcherDeathAnimation, false);
+				UE_LOG(LogCollectibleDropEnemy, Display,
+					TEXT("[ARQUERO] Animacion de muerte iniciada para %s."), *GetName());
+			}
 		}
-		else if (Distance < 625.0f)
+		else if (ACharacter* Player = UGameplayStatics::GetPlayerCharacter(this, 0))
 		{
-			const FVector RetreatTarget = GetActorLocation() - DirectionToPlayer * 650.0f;
-			AI->MoveToLocation(RetreatTarget, 75.0f, true, true, true, false);
-		}
-		else
-		{
-			AI->StopMovement();
-		}
-	}
+			FVector ToPlayer = Player->GetActorLocation() - GetActorLocation();
+			ToPlayer.Z = 0.0f;
+			const float Distance = ToPlayer.Size();
+			const FVector DirectionToPlayer = ToPlayer.GetSafeNormal();
+			if (!DirectionToPlayer.IsNearlyZero())
+			{
+				SetActorRotation(FRotator(0.0f, DirectionToPlayer.Rotation().Yaw, 0.0f));
+			}
 
-	if (!bArcherAttackActive && Distance <= 2200.0f && Distance >= 475.0f &&
-		GetWorld()->GetTimeSeconds() >= NextArcherShotTime)
-	{
-		StartCentaurShot();
-		return;
-	}
+			if (!bArcherAttackActive && AI)
+			{
+				if (Distance > 1750.0f)
+				{
+					AI->MoveToActor(Player, 1250.0f, true, true, true);
+				}
+				else if (Distance < 625.0f)
+				{
+					const FVector RetreatTarget = GetActorLocation() - DirectionToPlayer * 650.0f;
+					AI->MoveToLocation(RetreatTarget, 75.0f, true, true, true, false);
+				}
+				else
+				{
+					AI->StopMovement();
+				}
+			}
 
-	if (bArcherAttackActive)
-	{
-		return;
-	}
-
-	const FVector CurrentLocation = GetActorLocation();
-	const bool bWalking = GetVelocity().SizeSquared2D() > FMath::Square(8.0f) ||
-		FVector::DistSquared2D(CurrentLocation, ArcherPreviousLocation) > FMath::Square(0.5f);
-	ArcherPreviousLocation = CurrentLocation;
-	if (!bArcherLocomotionInitialized || bWalking != bArcherWasWalking)
-	{
-		if (UAnimSequenceBase* Animation = bWalking ? ArcherWalkAnimation : ArcherIdleAnimation)
-		{
-			CharacterMesh->SetPlayRate(bWalking ? 0.9f : 1.0f);
-			CharacterMesh->PlayAnimation(Animation, true);
+			const bool bShouldShoot = !bArcherAttackActive && Distance <= 2200.0f &&
+				Distance >= 475.0f && GetWorld()->GetTimeSeconds() >= NextArcherShotTime;
+			if (bShouldShoot)
+			{
+				StartCentaurShot();
+			}
+			else if (!bArcherAttackActive)
+			{
+				const FVector CurrentLocation = GetActorLocation();
+				const bool bWalking = GetVelocity().SizeSquared2D() > FMath::Square(8.0f) ||
+					FVector::DistSquared2D(CurrentLocation, ArcherPreviousLocation) > FMath::Square(0.5f);
+				ArcherPreviousLocation = CurrentLocation;
+				if (!bArcherLocomotionInitialized || bWalking != bArcherWasWalking)
+				{
+					if (UAnimSequenceBase* Animation = bWalking ? ArcherWalkAnimation : ArcherIdleAnimation)
+					{
+						CharacterMesh->SetPlayRate(bWalking ? 0.9f : 1.0f);
+						CharacterMesh->PlayAnimation(Animation, true);
+					}
+					bArcherWasWalking = bWalking;
+					bArcherLocomotionInitialized = true;
+				}
+			}
 		}
-		bArcherWasWalking = bWalking;
-		bArcherLocomotionInitialized = true;
+
 	}
 }
 
@@ -308,19 +299,15 @@ void ACollectibleDropEnemyBase::StartCentaurShot()
 
 void ACollectibleDropEnemyBase::SpawnCentaurArrow()
 {
-	if (IsMarkedDead() || !GetWorld())
+	if (!IsMarkedDead() && GetWorld())
 	{
-		return;
-	}
-	if (ArcherNockedArrowVisual)
-	{
-		ArcherNockedArrowVisual->SetVisibility(false, true);
-	}
-	ACharacter* Player = UGameplayStatics::GetPlayerCharacter(this, 0);
-	if (!Player)
-	{
-		return;
-	}
+		if (ArcherNockedArrowVisual)
+		{
+			ArcherNockedArrowVisual->SetVisibility(false, true);
+		}
+		ACharacter* Player = UGameplayStatics::GetPlayerCharacter(this, 0);
+		if (Player)
+		{
 	// ArrowAction is the actual nocked-arrow bone from the centaur skeleton.
 	// Using it keeps the projectile attached to the animated hand until release.
 	FVector SpawnLocation = GetMesh()->GetSocketLocation(TEXT("ArrowAction"));
@@ -341,7 +328,9 @@ void ACollectibleDropEnemyBase::SpawnCentaurArrow()
 	PlaySynchronizedCombatSound(ProjectileSound, 1.18f, TEXT("disparo de flecha"));
 	UE_LOG(LogCollectibleDropEnemy, Display,
 		TEXT("[ARQUERO] %s dispara una flecha hacia %s."),
-		*GetName(), *GetNameSafe(Player));
+			*GetName(), *GetNameSafe(Player));
+		}
+	}
 }
 
 void ACollectibleDropEnemyBase::FinishCentaurShot()
@@ -402,57 +391,49 @@ void ACollectibleDropEnemyBase::ConfigureGreystoneTankAnimation()
 void ACollectibleDropEnemyBase::UpdateGreystoneTankAnimation()
 {
 	USkeletalMeshComponent* CharacterMesh = GetMesh();
-	if (!CharacterMesh)
+	if (CharacterMesh)
 	{
-		return;
-	}
-
-	if (IsMarkedDead())
-	{
-		SetBlueprintAttackWindow(false);
-		if (!bGreystoneDeathAnimationStarted && GreystoneDeathAnimation)
+		if (IsMarkedDead())
 		{
-			GetWorldTimerManager().ClearTimer(GreystoneAttackWindowTimer);
-			GetWorldTimerManager().ClearTimer(GreystoneAttackEndTimer);
-			bGreystoneAttackActive = false;
-			bGreystoneDeathAnimationStarted = true;
-			CharacterMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-			CharacterMesh->SetPlayRate(1.0f);
-			CharacterMesh->PlayAnimation(GreystoneDeathAnimation, false);
-			UE_LOG(LogCollectibleDropEnemy, Display,
-				TEXT("[GREYSTONE TANQUE] Animacion de derrota iniciada para %s."),
-				*GetName());
+			SetBlueprintAttackWindow(false);
+			if (!bGreystoneDeathAnimationStarted && GreystoneDeathAnimation)
+			{
+				GetWorldTimerManager().ClearTimer(GreystoneAttackWindowTimer);
+				GetWorldTimerManager().ClearTimer(GreystoneAttackEndTimer);
+				bGreystoneAttackActive = false;
+				bGreystoneDeathAnimationStarted = true;
+				CharacterMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+				CharacterMesh->SetPlayRate(1.0f);
+				CharacterMesh->PlayAnimation(GreystoneDeathAnimation, false);
+				UE_LOG(LogCollectibleDropEnemy, Display,
+					TEXT("[GREYSTONE TANQUE] Animacion de derrota iniciada para %s."),
+					*GetName());
+			}
 		}
-		return;
-	}
-
-	if (bGreystoneAttackActive)
-	{
-		return;
-	}
-
-	const FVector CurrentLocation = GetActorLocation();
-	const float DistanceMovedSquared = FVector::DistSquared2D(
-		CurrentLocation,
-		GreystonePreviousLocation);
-	GreystonePreviousLocation = CurrentLocation;
-	const bool bIsWalking =
-		GetVelocity().SizeSquared2D() > FMath::Square(8.0f) ||
-		DistanceMovedSquared > FMath::Square(0.5f);
-	if (!bGreystoneLocomotionInitialized || bIsWalking != bGreystoneWasWalking)
-	{
-		UAnimSequenceBase* LocomotionAnimation = bIsWalking
-			? GreystoneWalkAnimation
-			: GreystoneIdleAnimation;
-		if (LocomotionAnimation)
+		else if (!bGreystoneAttackActive)
 		{
-			// The slower playback gives the tank a heavy gait without changing
-			// its actual navigation speed.
-			CharacterMesh->SetPlayRate(bIsWalking ? 0.72f : 1.0f);
-			CharacterMesh->PlayAnimation(LocomotionAnimation, true);
+			const FVector CurrentLocation = GetActorLocation();
+			const float DistanceMovedSquared = FVector::DistSquared2D(
+				CurrentLocation,
+				GreystonePreviousLocation);
+			GreystonePreviousLocation = CurrentLocation;
+			const bool bIsWalking =
+				GetVelocity().SizeSquared2D() > FMath::Square(8.0f) ||
+				DistanceMovedSquared > FMath::Square(0.5f);
+			if (!bGreystoneLocomotionInitialized || bIsWalking != bGreystoneWasWalking)
+			{
+				UAnimSequenceBase* LocomotionAnimation = bIsWalking
+					? GreystoneWalkAnimation
+					: GreystoneIdleAnimation;
+				if (LocomotionAnimation)
+				{
+					CharacterMesh->SetPlayRate(bIsWalking ? 0.72f : 1.0f);
+					CharacterMesh->PlayAnimation(LocomotionAnimation, true);
+				}
+				bGreystoneWasWalking = bIsWalking;
+				bGreystoneLocomotionInitialized = true;
+			}
 		}
-		bGreystoneWasWalking = bIsWalking;
-		bGreystoneLocomotionInitialized = true;
 	}
 }
 
@@ -505,17 +486,16 @@ void ACollectibleDropEnemyBase::EjecutarAtaqueIA()
 	if (IsCentaurArcher())
 	{
 		StartCentaurShot();
-		return;
 	}
-	if (IsGreystoneTank())
+	else if (IsGreystoneTank())
 	{
 		UE_LOG(LogCollectibleDropEnemy, Display,
 			TEXT("[GREYSTONE TANQUE] Orden de ataque recibida desde el Behavior Tree por %s."),
 			*GetName());
 		ReproducirAtaqueGreystoneTanque();
-		return;
 	}
-
+	else
+	{
 	// Existing enemies keep their Blueprint Atacar implementation. Calling it
 	// by reflection lets the shared BT task work with both the original
 	// Blueprint enemy and sibling enemy Blueprints such as Greystone.
@@ -532,6 +512,7 @@ void ACollectibleDropEnemyBase::EjecutarAtaqueIA()
 		UE_LOG(LogCollectibleDropEnemy, Warning,
 			TEXT("[ENEMIGO IA] %s no implementa la funcion Atacar."),
 			*GetName());
+	}
 	}
 }
 
@@ -581,21 +562,19 @@ void ACollectibleDropEnemyBase::SetBlueprintAttackWindow(const bool bActive)
 
 bool ACollectibleDropEnemyBase::ResolveCollectibleDrop(const bool bForceDrop)
 {
-	if (bDropResolved)
+	bool bSpawned = false;
+	if (!bDropResolved)
 	{
-		return false;
+		bDropResolved = true;
+		const float Chance = bForceDrop ? 1.0f : CollectibleDropChance;
+		bSpawned = AEnemyResourcePickup::SpawnRandomDrop(this, Chance) != nullptr;
+		UE_LOG(
+			LogCollectibleDropEnemy,
+			Display,
+			TEXT("[ENEMIGO DROP] %s resolvio su drop una sola vez: %s."),
+			*GetName(),
+			bSpawned ? TEXT("OBJETO CREADO") : TEXT("SIN OBJETO"));
 	}
-
-	bDropResolved = true;
-	const float Chance = bForceDrop ? 1.0f : CollectibleDropChance;
-	const bool bSpawned =
-		AEnemyResourcePickup::SpawnRandomDrop(this, Chance) != nullptr;
-	UE_LOG(
-		LogCollectibleDropEnemy,
-		Display,
-		TEXT("[ENEMIGO DROP] %s resolvio su drop una sola vez: %s."),
-		*GetName(),
-		bSpawned ? TEXT("OBJETO CREADO") : TEXT("SIN OBJETO"));
 	return bSpawned;
 }
 

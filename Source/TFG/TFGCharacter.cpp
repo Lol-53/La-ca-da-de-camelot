@@ -66,15 +66,15 @@ namespace CombatPowerHelpers
 
 	double ReadNumericProperty(const UObject* Object, FNumericProperty* Property)
 	{
-		if (!Object || !Property)
+		double Value = 0.0;
+		if (Object && Property)
 		{
-			return 0.0;
+			const void* ValueAddress = Property->ContainerPtrToValuePtr<void>(Object);
+			Value = Property->IsFloatingPoint()
+				? Property->GetFloatingPointPropertyValue(ValueAddress)
+				: static_cast<double>(Property->GetSignedIntPropertyValue(ValueAddress));
 		}
-
-		const void* ValueAddress = Property->ContainerPtrToValuePtr<void>(Object);
-		return Property->IsFloatingPoint()
-			? Property->GetFloatingPointPropertyValue(ValueAddress)
-			: static_cast<double>(Property->GetSignedIntPropertyValue(ValueAddress));
+		return Value;
 	}
 
 	void WriteNumericProperty(UObject* Object, FNumericProperty* Property, const double Value)
@@ -286,31 +286,34 @@ void ATFGCharacter::EjecutarInteraccionEmpaquetada()
 void ATFGCharacter::EjecutarEventoEntradaBlueprintEmpaquetado(
 	const TCHAR* PrefijoEvento)
 {
-	for (TFieldIterator<UFunction> FunctionIt(
-		GetClass(), EFieldIterationFlags::IncludeSuper); FunctionIt; ++FunctionIt)
+	bool bEventoEjecutado = false;
+	TFieldIterator<UFunction> FunctionIt(GetClass(), EFieldIterationFlags::IncludeSuper);
+	while (FunctionIt && !bEventoEjecutado)
 	{
 		UFunction* Function = *FunctionIt;
-		if (!Function || !Function->GetName().StartsWith(PrefijoEvento))
+		if (Function && Function->GetName().StartsWith(PrefijoEvento))
 		{
-			continue;
+			TArray<uint8> Parameters;
+			Parameters.SetNumZeroed(Function->ParmsSize);
+			ProcessEvent(Function, Parameters.Num() > 0 ? Parameters.GetData() : nullptr);
+			UE_LOG(
+				LogCombatPowers,
+				Display,
+				TEXT("[ENTRADA SHIPPING] Ejecutado evento Blueprint %s."),
+				*Function->GetName());
+			bEventoEjecutado = true;
 		}
-
-		TArray<uint8> Parameters;
-		Parameters.SetNumZeroed(Function->ParmsSize);
-		ProcessEvent(Function, Parameters.Num() > 0 ? Parameters.GetData() : nullptr);
-		UE_LOG(
-			LogCombatPowers,
-			Display,
-			TEXT("[ENTRADA SHIPPING] Ejecutado evento Blueprint %s."),
-			*Function->GetName());
-		return;
+		++FunctionIt;
 	}
 
-	UE_LOG(
-		LogCombatPowers,
-		Warning,
-		TEXT("[ENTRADA SHIPPING] No se encontro evento Blueprint con prefijo %s."),
-		PrefijoEvento);
+	if (!bEventoEjecutado)
+	{
+		UE_LOG(
+			LogCombatPowers,
+			Warning,
+			TEXT("[ENTRADA SHIPPING] No se encontro evento Blueprint con prefijo %s."),
+			PrefijoEvento);
+	}
 }
 
 void ATFGCharacter::BeginPlay()
@@ -578,36 +581,33 @@ void ATFGCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void ATFGCharacter::CrearHUDPociones()
 {
-	if (!IsLocallyControlled() || PotionQuickbarWidget ||
-		EsLobbyMesaRedonda())
+	const bool bEsJugadorLocal = IsLocallyControlled();
+	const bool bEsLobby = EsLobbyMesaRedonda();
+	if (bEsJugadorLocal && !PotionQuickbarWidget && !bEsLobby)
 	{
-		if (IsLocallyControlled() && EsLobbyMesaRedonda())
+		APlayerController* PlayerController = Cast<APlayerController>(GetController());
+		if (PlayerController)
 		{
-			UE_LOG(
-				LogCombatPowers,
-				Display,
-				TEXT("[HUD] Barra de pociones ocultada en Lobby_MesaRedonda."));
+			PotionQuickbarWidget = CreateWidget<UPotionQuickbarWidget>(
+				PlayerController, UPotionQuickbarWidget::StaticClass());
+			if (PotionQuickbarWidget)
+			{
+				PotionQuickbarWidget->SetIconTextures(
+					IconoPocionVida,
+					IconoPocionEnergia,
+					IconoPocionMana);
+				PotionQuickbarWidget->AddToViewport(35);
+				UE_LOG(LogCombatPowers, Display,
+					TEXT("[POCIONES] Barra rapida creada: Z vida, X energia, C mana."));
+			}
 		}
-		return;
 	}
-
-	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if (!PlayerController)
+	else if (bEsJugadorLocal && bEsLobby)
 	{
-		return;
-	}
-
-	PotionQuickbarWidget = CreateWidget<UPotionQuickbarWidget>(
-		PlayerController, UPotionQuickbarWidget::StaticClass());
-	if (PotionQuickbarWidget)
-	{
-		PotionQuickbarWidget->SetIconTextures(
-			IconoPocionVida,
-			IconoPocionEnergia,
-			IconoPocionMana);
-		PotionQuickbarWidget->AddToViewport(35);
-		UE_LOG(LogCombatPowers, Display,
-			TEXT("[POCIONES] Barra rapida creada: Z vida, X energia, C mana."));
+		UE_LOG(
+			LogCombatPowers,
+			Display,
+			TEXT("[HUD] Barra de pociones ocultada en Lobby_MesaRedonda."));
 	}
 }
 
@@ -620,27 +620,22 @@ void ATFGCharacter::OcultarEtiquetaVidaActualHUD()
 	int32 EtiquetasOcultadas = 0;
 	for (UUserWidget* Widget : Widgets)
 	{
-		if (!Widget || !Widget->WidgetTree)
+		if (Widget && Widget->WidgetTree)
 		{
-			continue;
-		}
-
-		TArray<UWidget*> Descendientes;
-		Widget->WidgetTree->GetAllWidgets(Descendientes);
-		for (UWidget* Descendiente : Descendientes)
-		{
-			UTextBlock* Texto = Cast<UTextBlock>(Descendiente);
-			if (!Texto)
+			TArray<UWidget*> Descendientes;
+			Widget->WidgetTree->GetAllWidgets(Descendientes);
+			for (UWidget* Descendiente : Descendientes)
 			{
-				continue;
-			}
-
-			FString TextoNormalizado = Texto->GetText().ToString();
-			TextoNormalizado.ReplaceInline(TEXT(" "), TEXT(""));
-			if (TextoNormalizado.Equals(TEXT("VidaActual"), ESearchCase::IgnoreCase))
-			{
-				Texto->SetVisibility(ESlateVisibility::Collapsed);
-				++EtiquetasOcultadas;
+				if (UTextBlock* Texto = Cast<UTextBlock>(Descendiente))
+				{
+					FString TextoNormalizado = Texto->GetText().ToString();
+					TextoNormalizado.ReplaceInline(TEXT(" "), TEXT(""));
+					if (TextoNormalizado.Equals(TEXT("VidaActual"), ESearchCase::IgnoreCase))
+					{
+						Texto->SetVisibility(ESlateVisibility::Collapsed);
+						++EtiquetasOcultadas;
+					}
+				}
 			}
 		}
 	}
@@ -691,34 +686,29 @@ void ATFGCharacter::ConfigurarHUDParaMapaActual()
 
 void ATFGCharacter::MostrarDialogoPrimerRetornoSiPendiente()
 {
-	if (!EsLobbyMesaRedonda() || !IsLocallyControlled() || LobbyReturnDialogueWidget)
-	{
-		return;
-	}
-
-	UGameInstance* GameInstance = GetGameInstance();
+	const bool bPuedeMostrar = EsLobbyMesaRedonda() && IsLocallyControlled() &&
+		!LobbyReturnDialogueWidget;
+	UGameInstance* GameInstance = bPuedeMostrar ? GetGameInstance() : nullptr;
 	URunPowerPersistenceSubsystem* Persistence = GameInstance
 		? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>()
 		: nullptr;
-	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if (!Persistence || !Persistence->ShouldShowFirstReturnDialogue() || !PlayerController)
+	APlayerController* PlayerController = bPuedeMostrar
+		? Cast<APlayerController>(GetController())
+		: nullptr;
+	if (Persistence && Persistence->ShouldShowFirstReturnDialogue() && PlayerController)
 	{
-		return;
+		LobbyReturnDialogueWidget = CreateWidget<ULobbyReturnDialogueWidget>(
+			PlayerController,
+			ULobbyReturnDialogueWidget::StaticClass());
 	}
 
-	LobbyReturnDialogueWidget = CreateWidget<ULobbyReturnDialogueWidget>(
-		PlayerController,
-		ULobbyReturnDialogueWidget::StaticClass());
-	if (!LobbyReturnDialogueWidget)
+	if (LobbyReturnDialogueWidget && PlayerController)
 	{
-		return;
-	}
-
-	LobbyReturnDialogueWidget->AddToViewport(4000);
-	MovimientoDesactivado = true;
-	GetCharacterMovement()->StopMovementImmediately();
-	PlayerController->SetIgnoreMoveInput(true);
-	PlayerController->SetIgnoreLookInput(true);
+		LobbyReturnDialogueWidget->AddToViewport(4000);
+		MovimientoDesactivado = true;
+		GetCharacterMovement()->StopMovementImmediately();
+		PlayerController->SetIgnoreMoveInput(true);
+		PlayerController->SetIgnoreLookInput(true);
 
 	if (!LobbyReturnDialogueInputComponent)
 	{
@@ -734,13 +724,14 @@ void ATFGCharacter::MostrarDialogoPrimerRetornoSiPendiente()
 			this,
 			&ATFGCharacter::CerrarDialogoPrimerRetorno);
 	}
-	PlayerController->PushInputComponent(LobbyReturnDialogueInputComponent);
-	bLobbyReturnDialogueInputBound = true;
+		PlayerController->PushInputComponent(LobbyReturnDialogueInputComponent);
+		bLobbyReturnDialogueInputBound = true;
 
-	UE_LOG(
-		LogCombatPowers,
-		Display,
-		TEXT("[DIALOGO ARTURO] Primer regreso mostrado. Pulsa E para continuar."));
+		UE_LOG(
+			LogCombatPowers,
+			Display,
+			TEXT("[DIALOGO ARTURO] Primer regreso mostrado. Pulsa E para continuar."));
+	}
 }
 
 void ATFGCharacter::CerrarDialogoPrimerRetorno()
@@ -882,7 +873,8 @@ void ATFGCharacter::UsarPocion(const EPotionType Tipo)
 	UGameInstance* GameInstance = GetGameInstance();
 	URunPowerPersistenceSubsystem* Persistence =
 		GameInstance ? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>() : nullptr;
-	if (!Persistence || Persistence->GetPotionCount(Tipo) <= 0)
+	const bool bHayPocion = Persistence && Persistence->GetPotionCount(Tipo) > 0;
+	if (!bHayPocion)
 	{
 		if (GEngine)
 		{
@@ -891,7 +883,6 @@ void ATFGCharacter::UsarPocion(const EPotionType Tipo)
 		}
 		UE_LOG(LogCombatPowers, Warning, TEXT("[POCIONES] No hay pociones tipo=%d."),
 			static_cast<int32>(Tipo));
-		return;
 	}
 
 	double Restaurado = 0.0;
@@ -899,7 +890,7 @@ void ATFGCharacter::UsarPocion(const EPotionType Tipo)
 	double Maximo = 0.0;
 	FName FuncionHUD = NAME_None;
 
-	if (Tipo == EPotionType::Vida)
+	if (bHayPocion && Tipo == EPotionType::Vida)
 	{
 		if (UActorComponent* Componente = BuscarComponenteVida())
 		{
@@ -912,7 +903,7 @@ void ATFGCharacter::UsarPocion(const EPotionType Tipo)
 				TEXT("pocion de vida"));
 		}
 	}
-	else
+	else if (bHayPocion)
 	{
 		const bool bEsMana = Tipo == EPotionType::Mana;
 		const FName ActualName = bEsMana ? TEXT("ManaActual") : TEXT("StaminaActual");
@@ -932,7 +923,7 @@ void ATFGCharacter::UsarPocion(const EPotionType Tipo)
 		}
 	}
 
-	if (Restaurado <= 0.0)
+	if (bHayPocion && Restaurado <= 0.0)
 	{
 		if (GEngine)
 		{
@@ -942,23 +933,24 @@ void ATFGCharacter::UsarPocion(const EPotionType Tipo)
 		UE_LOG(LogCombatPowers, Display,
 			TEXT("[POCIONES] Tipo=%d no consumida porque el recurso esta lleno."),
 			static_cast<int32>(Tipo));
-		return;
 	}
-
-	Persistence->ConsumePotion(Tipo);
-	if (PotionQuickbarWidget)
+	else if (bHayPocion)
 	{
-		PotionQuickbarWidget->RefreshCounts();
+		Persistence->ConsumePotion(Tipo);
+		if (PotionQuickbarWidget)
+		{
+			PotionQuickbarWidget->RefreshCounts();
+		}
+		if (GEngine)
+		{
+			const FString Message = FString::Printf(TEXT("Pocion usada: +%.0f"), Restaurado);
+			GEngine->AddOnScreenDebugMessage(-1, 2.5f, FColor::Green, Message);
+		}
+		UE_LOG(LogCombatPowers, Display,
+			TEXT("[POCIONES] Tipo=%d consumida: +%.1f (%.1f / %.1f), restantes=%d."),
+			static_cast<int32>(Tipo), Restaurado, Anterior + Restaurado, Maximo,
+			Persistence->GetPotionCount(Tipo));
 	}
-	if (GEngine)
-	{
-		const FString Message = FString::Printf(TEXT("Pocion usada: +%.0f"), Restaurado);
-		GEngine->AddOnScreenDebugMessage(-1, 2.5f, FColor::Green, Message);
-	}
-	UE_LOG(LogCombatPowers, Display,
-		TEXT("[POCIONES] Tipo=%d consumida: +%.1f (%.1f / %.1f), restantes=%d."),
-		static_cast<int32>(Tipo), Restaurado, Anterior + Restaurado, Maximo,
-		Persistence->GetPotionCount(Tipo));
 }
 
 void ATFGCharacter::GuardarEstadoPoderesPersistentes(
@@ -1137,45 +1129,35 @@ void ATFGCharacter::AlternarMenuPausa()
 
 void ATFGCharacter::AlternarInterfazEstadoRun()
 {
-	if (!IsLocallyControlled() || bMuerteEnCurso || bDialogoActivo ||
-		UGameplayStatics::IsGamePaused(this))
-	{
-		return;
-	}
-
-	if (RunStatusWidget)
+	const bool bPuedeAlternar = IsLocallyControlled() && !bMuerteEnCurso &&
+		!bDialogoActivo && !UGameplayStatics::IsGamePaused(this);
+	if (bPuedeAlternar && RunStatusWidget)
 	{
 		CerrarInterfazEstadoRun();
-		return;
 	}
-
-	const int32 RoomNumber = ResolverNumeroSalaActual(true);
-	if (RoomNumber <= 0)
+	else if (bPuedeAlternar)
 	{
-		UE_LOG(LogCombatPowers, Verbose,
-			TEXT("[ESTADO RUN] Tab ignorado fuera de una run."));
-		return;
+		const int32 RoomNumber = ResolverNumeroSalaActual(true);
+		if (RoomNumber <= 0)
+		{
+			UE_LOG(LogCombatPowers, Verbose,
+				TEXT("[ESTADO RUN] Tab ignorado fuera de una run."));
+		}
+		else if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+		{
+			RunStatusWidget = CreateWidget<URunStatusWidget>(
+				PlayerController, URunStatusWidget::StaticClass());
+			if (RunStatusWidget)
+			{
+				const TArray<FString> ActivePowers = ObtenerNombresPoderesTemporales();
+				RunStatusWidget->Configure(RoomNumber, ActivePowers);
+				RunStatusWidget->AddToViewport(1800);
+				UE_LOG(LogCombatPowers, Display,
+					TEXT("[ESTADO RUN] Sala %d; mostrando %d poderes temporales."),
+					RoomNumber, ActivePowers.Num());
+			}
+		}
 	}
-
-	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if (!PlayerController)
-	{
-		return;
-	}
-
-	RunStatusWidget = CreateWidget<URunStatusWidget>(
-		PlayerController, URunStatusWidget::StaticClass());
-	if (!RunStatusWidget)
-	{
-		return;
-	}
-
-	const TArray<FString> ActivePowers = ObtenerNombresPoderesTemporales();
-	RunStatusWidget->Configure(RoomNumber, ActivePowers);
-	RunStatusWidget->AddToViewport(1800);
-	UE_LOG(LogCombatPowers, Display,
-		TEXT("[ESTADO RUN] Sala %d; mostrando %d poderes temporales."),
-		RoomNumber, ActivePowers.Num());
 }
 
 void ATFGCharacter::CerrarInterfazEstadoRun()
@@ -1197,33 +1179,33 @@ int32 ATFGCharacter::ResolverNumeroSalaActual(
 		Persistence = GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>();
 	}
 
-	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+	int32 RoomNumber = 0;
+	TActorIterator<AActor> It(GetWorld());
+	while (It && RoomNumber == 0)
 	{
 		AActor* Actor = *It;
-		if (!Actor || !Actor->GetClass()->GetName().Contains(TEXT("BP_RunManager")))
+		if (Actor && Actor->GetClass()->GetName().Contains(TEXT("BP_RunManager")))
 		{
-			continue;
-		}
-
-		if (FNumericProperty* IndexProperty = CombatPowerHelpers::FindNumericProperty(
-			Actor, TEXT("CurrentRoomIndex")))
-		{
-			const int32 RoomNumber = FMath::Max(1, FMath::RoundToInt(
-				CombatPowerHelpers::ReadNumericProperty(Actor, IndexProperty)) + 1);
-			if (bUpdatePersistence && Persistence)
+			if (FNumericProperty* IndexProperty = CombatPowerHelpers::FindNumericProperty(
+				Actor, TEXT("CurrentRoomIndex")))
 			{
-				Persistence->SetCurrentRunRoomNumber(RoomNumber);
+				RoomNumber = FMath::Max(1, FMath::RoundToInt(
+					CombatPowerHelpers::ReadNumericProperty(Actor, IndexProperty)) + 1);
+				if (bUpdatePersistence && Persistence)
+				{
+					Persistence->SetCurrentRunRoomNumber(RoomNumber);
+				}
 			}
-			return RoomNumber;
 		}
+		++It;
 	}
 
 	const FString MapName = GetWorld() ? GetWorld()->GetMapName() : FString();
-	if (MapName.Contains(TEXT("Combate_Final_Mordred")))
+	if (RoomNumber == 0 && MapName.Contains(TEXT("Combate_Final_Mordred")))
 	{
-		return (Persistence ? Persistence->GetCurrentRunRoomNumber() : 1) + 1;
+		RoomNumber = (Persistence ? Persistence->GetCurrentRunRoomNumber() : 1) + 1;
 	}
-	return 0;
+	return RoomNumber;
 }
 
 TArray<FString> ATFGCharacter::ObtenerNombresPoderesTemporales() const
@@ -1310,25 +1292,23 @@ void ATFGCharacter::ActivarPoderNuevo2Sigilo()
 	for (TActorIterator<ACharacter> It(GetWorld()); It; ++It)
 	{
 		ACharacter* Enemigo = *It;
-		if (!IsValid(Enemigo) || Enemigo == this)
+		if (IsValid(Enemigo) && Enemigo != this)
 		{
-			continue;
-		}
-
-		if (AAIController* ControladorIA = Cast<AAIController>(Enemigo->GetController()))
-		{
-			if (UPawnSensingComponent* Sensor = Enemigo->FindComponentByClass<UPawnSensingComponent>())
+			if (AAIController* ControladorIA = Cast<AAIController>(Enemigo->GetController()))
 			{
-				Sensor->SetSensingUpdatesEnabled(false);
-				++SensoresDesactivados;
+				if (UPawnSensingComponent* Sensor = Enemigo->FindComponentByClass<UPawnSensingComponent>())
+				{
+					Sensor->SetSensingUpdatesEnabled(false);
+					++SensoresDesactivados;
+				}
+				if (UBlackboardComponent* Blackboard = ControladorIA->GetBlackboardComponent())
+				{
+					Blackboard->SetValueAsBool(TEXT("Agro"), false);
+				}
+				ControladorIA->StopMovement();
+				ControladorIA->ClearFocus(EAIFocusPriority::Gameplay);
+				++EnemigosSinAggro;
 			}
-			if (UBlackboardComponent* Blackboard = ControladorIA->GetBlackboardComponent())
-			{
-				Blackboard->SetValueAsBool(TEXT("Agro"), false);
-			}
-			ControladorIA->StopMovement();
-			ControladorIA->ClearFocus(EAIFocusPriority::Gameplay);
-			++EnemigosSinAggro;
 		}
 	}
 
@@ -1428,47 +1408,56 @@ void ATFGCharacter::AlternarPoderNuevo8AtaqueRapido()
 
 bool ATFGCharacter::TienePowerUpDeSala(const int32 PowerUpId) const
 {
+	bool bTienePowerUp = false;
 	if (EsPowerUpActivoDeSala(PowerUpId))
 	{
-		return PowerUpActivoDeSala == PowerUpId;
+		bTienePowerUp = PowerUpActivoDeSala == PowerUpId;
 	}
-
-	switch (PowerUpId)
+	else
 	{
+		switch (PowerUpId)
+		{
 	case 1:
 	{
 		if (bDobleDanyoPreparado || PowerUpActivoDeSala == 1)
 		{
-			return true;
+			bTienePowerUp = true;
 		}
-		const UGameInstance* GameInstance = GetGameInstance();
-		const URunPowerPersistenceSubsystem* Persistence =
-			GameInstance
-				? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>()
-				: nullptr;
-		return Persistence && Persistence->HasPersistentRoomPowerUp(1);
+		else
+		{
+			const UGameInstance* GameInstance = GetGameInstance();
+			const URunPowerPersistenceSubsystem* Persistence =
+				GameInstance
+					? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>()
+					: nullptr;
+			bTienePowerUp = Persistence && Persistence->HasPersistentRoomPowerUp(1);
+		}
+		break;
 	}
-	case 2: return bAtaquesQueman;
-	case 3: return bAtaquesDesplazan;
-	case 4: return bAtaquesCriticos;
-	case 5: return bAtaquesDebilitan;
-	case 6: return bVelocidadAumentada;
-	case 7: return bTieneVidaExtra && !bVidaExtraPermanenteAsignada;
-	case 8: return bDanyoReducido;
-	case 9: return bProyectilesParalizan;
-	case 10: return bGuardiaDireccionalActiva;
-	case 12: return bRoboVidaActivo;
-	case 13: return bEsquivaActiva;
-	case 14: return bInversionDanyoActiva;
-	case 15: return bDashHabilitado;
-	case 17: return bAtaqueRapidoActivo;
-	case 18: return bProyectilesAutoapuntado;
-	case 19: return bProyectilesRebotan;
-	case 20: return bRecursosAlquimiaObtenidos;
-	case 21: return bAtaquesDesvianProyectiles;
+	case 2: bTienePowerUp = bAtaquesQueman; break;
+	case 3: bTienePowerUp = bAtaquesDesplazan; break;
+	case 4: bTienePowerUp = bAtaquesCriticos; break;
+	case 5: bTienePowerUp = bAtaquesDebilitan; break;
+	case 6: bTienePowerUp = bVelocidadAumentada; break;
+	case 7: bTienePowerUp = bTieneVidaExtra && !bVidaExtraPermanenteAsignada; break;
+	case 8: bTienePowerUp = bDanyoReducido; break;
+	case 9: bTienePowerUp = bProyectilesParalizan; break;
+	case 10: bTienePowerUp = bGuardiaDireccionalActiva; break;
+	case 12: bTienePowerUp = bRoboVidaActivo; break;
+	case 13: bTienePowerUp = bEsquivaActiva; break;
+	case 14: bTienePowerUp = bInversionDanyoActiva; break;
+	case 15: bTienePowerUp = bDashHabilitado; break;
+	case 17: bTienePowerUp = bAtaqueRapidoActivo; break;
+	case 18: bTienePowerUp = bProyectilesAutoapuntado; break;
+	case 19: bTienePowerUp = bProyectilesRebotan; break;
+	case 20: bTienePowerUp = bRecursosAlquimiaObtenidos; break;
+	case 21: bTienePowerUp = bAtaquesDesvianProyectiles; break;
 	default:
-		return false;
+		bTienePowerUp = false;
+		break;
+		}
 	}
+	return bTienePowerUp;
 }
 
 bool ATFGCharacter::EsPowerUpActivoDeSala(const int32 PowerUpId) const
@@ -1505,6 +1494,7 @@ void ATFGCharacter::ActivarPowerUpDeSalaEquipado()
 
 bool ATFGCharacter::OtorgarPowerUpDeSala(const int32 PowerUpId)
 {
+	bool bPowerUpOtorgado = true;
 	if (EsPowerUpActivoDeSala(PowerUpId) && PowerUpActivoDeSala != 0)
 	{
 		UE_LOG(
@@ -1512,21 +1502,22 @@ bool ATFGCharacter::OtorgarPowerUpDeSala(const int32 PowerUpId)
 			Warning,
 			TEXT("[POWER-UP DE SALA] Ya existe un poder activo equipado (%d); no se puede obtener otro durante esta run."),
 			PowerUpActivoDeSala);
-		return false;
+		bPowerUpOtorgado = false;
 	}
-
-	if (TienePowerUpDeSala(PowerUpId))
+	else if (TienePowerUpDeSala(PowerUpId))
 	{
 		UE_LOG(
 			LogCombatPowers,
 			Warning,
 			TEXT("[POWER-UP DE SALA] La mejora %d ya estaba obtenida; no se ha desactivado."),
 			PowerUpId);
-		return false;
+		bPowerUpOtorgado = false;
 	}
 
-	switch (PowerUpId)
+	if (bPowerUpOtorgado)
 	{
+		switch (PowerUpId)
+		{
 	case 1:
 		bDobleDanyoPreparado = true;
 		FinEnfriamientoDobleDanyo = 0.0f;
@@ -1663,11 +1654,16 @@ bool ATFGCharacter::OtorgarPowerUpDeSala(const int32 PowerUpId)
 			Error,
 			TEXT("[POWER-UP DE SALA] Identificador invalido: %d."),
 			PowerUpId);
-		return false;
+		bPowerUpOtorgado = false;
+		break;
+		}
 	}
 
-	GuardarEstadoPoderesPersistentes(TEXT("power-up de sala obtenido"));
-	return true;
+	if (bPowerUpOtorgado)
+	{
+		GuardarEstadoPoderesPersistentes(TEXT("power-up de sala obtenido"));
+	}
+	return bPowerUpOtorgado;
 }
 
 float ATFGCharacter::ObtenerMultiplicadorVelocidadAtaque() const
@@ -1683,19 +1679,17 @@ void ATFGCharacter::RegistrarFuenteDanyo(AActor* FuenteDanyo)
 
 void ATFGCharacter::IniciarSprint()
 {
-	if (MovimientoDesactivado || bSprintActivo)
-	{
-		return;
-	}
-	if (ObtenerStaminaActual() <= 0.0f)
+	const bool bPuedeIntentarSprint = !MovimientoDesactivado && !bSprintActivo;
+	if (bPuedeIntentarSprint && ObtenerStaminaActual() <= 0.0f)
 	{
 		UE_LOG(LogCombatPowers, Warning, TEXT("[SPRINT] No se puede iniciar: stamina agotada."));
-		return;
 	}
-
-	bSprintActivo = true;
-	ActualizarVelocidadMovimiento();
-	UE_LOG(LogCombatPowers, Display, TEXT("[SPRINT] Iniciado con Shift: velocidad %.1f."), GetCharacterMovement()->MaxWalkSpeed);
+	else if (bPuedeIntentarSprint)
+	{
+		bSprintActivo = true;
+		ActualizarVelocidadMovimiento();
+		UE_LOG(LogCombatPowers, Display, TEXT("[SPRINT] Iniciado con Shift: velocidad %.1f."), GetCharacterMovement()->MaxWalkSpeed);
+	}
 }
 
 void ATFGCharacter::DetenerSprint()
@@ -1773,58 +1767,45 @@ void ATFGCharacter::AplicarMejorasPermanentes()
 void ATFGCharacter::RestaurarVidaPersistente()
 {
 	using namespace CombatPowerHelpers;
-	if (EsLobbyMesaRedonda())
-	{
-		return;
-	}
-
-	UGameInstance* GameInstance = GetGameInstance();
+	UGameInstance* GameInstance = !EsLobbyMesaRedonda() ? GetGameInstance() : nullptr;
 	const URunPowerPersistenceSubsystem* Persistence =
 		GameInstance
 			? GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>()
 			: nullptr;
-	if (!Persistence || !Persistence->HasStoredState())
-	{
-		return;
-	}
-
-	const FRunPersistentPowerState& State = Persistence->GetPowerState();
-	if (!State.bTieneVidaGuardada)
-	{
-		return;
-	}
-
-	UActorComponent* ComponenteVida = BuscarComponenteVida();
+	const FRunPersistentPowerState* State = Persistence && Persistence->HasStoredState()
+		? &Persistence->GetPowerState()
+		: nullptr;
+	UActorComponent* ComponenteVida = State && State->bTieneVidaGuardada
+		? BuscarComponenteVida()
+		: nullptr;
 	FNumericProperty* VidaActualProperty =
 		FindNumericProperty(ComponenteVida, TEXT("VidaActual"));
 	FNumericProperty* VidaMaximaProperty =
 		FindNumericProperty(ComponenteVida, TEXT("VidaMaxima"));
-	if (!ComponenteVida || !VidaActualProperty || !VidaMaximaProperty)
+	if (ComponenteVida && VidaActualProperty && VidaMaximaProperty)
 	{
-		return;
+		const double VidaMaxima =
+			ReadNumericProperty(ComponenteVida, VidaMaximaProperty);
+		const double VidaRestaurada = FMath::Clamp(
+			static_cast<double>(State->VidaActualGuardada),
+			1.0,
+			VidaMaxima);
+		WriteNumericProperty(
+			ComponenteVida,
+			VidaActualProperty,
+			VidaRestaurada);
+		ActualizarHUDRecurso(
+			TEXT("CambiarVida"),
+			VidaMaxima > 0.0 ? VidaRestaurada / VidaMaxima : 0.0);
+
+		UE_LOG(
+			LogCombatPowers,
+			Display,
+			TEXT("[PERSISTENCIA VIDA] Restaurada %.1f / %.1f al entrar en %s."),
+			VidaRestaurada,
+			VidaMaxima,
+			*GetWorld()->GetMapName());
 	}
-
-	const double VidaMaxima =
-		ReadNumericProperty(ComponenteVida, VidaMaximaProperty);
-	const double VidaRestaurada = FMath::Clamp(
-		static_cast<double>(State.VidaActualGuardada),
-		1.0,
-		VidaMaxima);
-	WriteNumericProperty(
-		ComponenteVida,
-		VidaActualProperty,
-		VidaRestaurada);
-	ActualizarHUDRecurso(
-		TEXT("CambiarVida"),
-		VidaMaxima > 0.0 ? VidaRestaurada / VidaMaxima : 0.0);
-
-	UE_LOG(
-		LogCombatPowers,
-		Display,
-		TEXT("[PERSISTENCIA VIDA] Restaurada %.1f / %.1f al entrar en %s."),
-		VidaRestaurada,
-		VidaMaxima,
-		*GetWorld()->GetMapName());
 }
 
 void ATFGCharacter::ActivarPoder1DobleDanyo()
@@ -1838,21 +1819,20 @@ void ATFGCharacter::ActivarPoder1DobleDanyo()
 		UE_LOG(LogCombatPowers, Display,
 			TEXT("[PODER 1] Pasivo concedido: el siguiente ataque hara x2 dano; recarga automatica %.1f s."),
 			EnfriamientoDobleDanyo);
-		return;
 	}
-
-	if (bDobleDanyoPreparado)
+	else if (bDobleDanyoPreparado)
 	{
 		UE_LOG(LogCombatPowers, Display,
 			TEXT("[PODER 1] El pasivo ya esta preparado para el siguiente impacto."));
-		return;
 	}
-
-	const float Restante = FMath::Max(
-		0.0f, FinEnfriamientoDobleDanyo - GetWorld()->GetTimeSeconds());
-	UE_LOG(LogCombatPowers, Display,
-		TEXT("[PODER 1] Pasivo en recarga automatica: %.2f s restantes."),
-		Restante);
+	else
+	{
+		const float Restante = FMath::Max(
+			0.0f, FinEnfriamientoDobleDanyo - GetWorld()->GetTimeSeconds());
+		UE_LOG(LogCombatPowers, Display,
+			TEXT("[PODER 1] Pasivo en recarga automatica: %.2f s restantes."),
+			Restante);
+	}
 }
 
 void ATFGCharacter::DobleDanyoDisponible()
@@ -1940,12 +1920,14 @@ void ATFGCharacter::AlternarPoder9Paralisis()
 
 void ATFGCharacter::AplicarGolpeConPoderes(AActor* Objetivo, float DanyoBase, bool bEsProyectil)
 {
-	if (!IsValid(Objetivo) || Objetivo == this || !SoportaDanyoBlueprint(Objetivo))
+	const bool bObjetivoValido = IsValid(Objetivo) && Objetivo != this &&
+		SoportaDanyoBlueprint(Objetivo);
+	if (!bObjetivoValido)
 	{
 		UE_LOG(LogCombatPowers, Warning, TEXT("Impacto ignorado: %s no es un objetivo valido de RecibirDanyo."), *GetNameSafe(Objetivo));
-		return;
 	}
-
+	else
+	{
 	float DanyoFinal = FMath::Max(0.0f, DanyoBase) * MultiplicadorDanyoPermanente;
 	if (TienePowerUpDeSala(1) && bDobleDanyoPreparado)
 	{
@@ -1971,18 +1953,18 @@ void ATFGCharacter::AplicarGolpeConPoderes(AActor* Objetivo, float DanyoBase, bo
 			*GetNameSafe(Objetivo), MultiplicadorCritico, DanyoFinal);
 	}
 
-	if (!EnviarDanyoBlueprint(Objetivo, DanyoFinal))
+	const bool bDanyoEnviado = EnviarDanyoBlueprint(Objetivo, DanyoFinal);
+	if (bDanyoEnviado)
 	{
-		return;
-	}
-	if (UGameInstance* GameInstance = GetGameInstance())
-	{
-		if (UMusicManagerSubsystem* Music =
-			GameInstance->GetSubsystem<UMusicManagerSubsystem>())
+		if (UGameInstance* GameInstance = GetGameInstance())
 		{
-			Music->NotifyCombatActivity();
+			if (UMusicManagerSubsystem* Music =
+				GameInstance->GetSubsystem<UMusicManagerSubsystem>())
+			{
+				Music->NotifyCombatActivity();
+			}
 		}
-	}
+
 
 	UE_LOG(LogCombatPowers, Display, TEXT("Impacto %s -> %s: %.1f dano%s."), *GetNameSafe(this), *GetNameSafe(Objetivo),
 		DanyoFinal, bEsProyectil ? TEXT(" (proyectil)") : TEXT(""));
@@ -2018,47 +2000,32 @@ void ATFGCharacter::AplicarGolpeConPoderes(AActor* Objetivo, float DanyoBase, bo
 	{
 		AplicarParalisis(Objetivo);
 	}
+	}
+	}
 }
 
 void ATFGCharacter::ReproducirCameraShakeGolpe(const bool bEsProyectil)
 {
-	if (!IsLocallyControlled() || !CameraShakeGolpeEnemigo || bMuerteEnCurso)
-	{
-		return;
-	}
-
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-
-	const float Ahora = World->GetTimeSeconds();
-	if (Ahora - UltimoCameraShakeGolpe < IntervaloMinimoCameraShake)
-	{
-		return;
-	}
-
-	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if (!PlayerController)
-	{
-		return;
-	}
-
+	UWorld* World = IsLocallyControlled() && CameraShakeGolpeEnemigo && !bMuerteEnCurso
+		? GetWorld()
+		: nullptr;
+	const float Ahora = World ? World->GetTimeSeconds() : 0.0f;
+	APlayerController* PlayerController = World &&
+		Ahora - UltimoCameraShakeGolpe >= IntervaloMinimoCameraShake
+		? Cast<APlayerController>(GetController())
+		: nullptr;
 	const float Intensidad = bEsProyectil
 		? IntensidadCameraShakeProyectil
 		: IntensidadCameraShakeCuerpoACuerpo;
-	if (Intensidad <= 0.0f)
+	if (PlayerController && Intensidad > 0.0f)
 	{
-		return;
+		PlayerController->ClientStartCameraShake(CameraShakeGolpeEnemigo, Intensidad);
+		UltimoCameraShakeGolpe = Ahora;
+		UE_LOG(LogCombatPowers, Verbose,
+			TEXT("[CAMARA] Impacto confirmado: shake %s con intensidad %.2f."),
+			bEsProyectil ? TEXT("de proyectil") : TEXT("cuerpo a cuerpo"),
+			Intensidad);
 	}
-
-	PlayerController->ClientStartCameraShake(CameraShakeGolpeEnemigo, Intensidad);
-	UltimoCameraShakeGolpe = Ahora;
-	UE_LOG(LogCombatPowers, Verbose,
-		TEXT("[CAMARA] Impacto confirmado: shake %s con intensidad %.2f."),
-		bEsProyectil ? TEXT("de proyectil") : TEXT("cuerpo a cuerpo"),
-		Intensidad);
 }
 
 bool ATFGCharacter::EsActorProyectil(const AActor* Actor) const
@@ -2071,13 +2038,10 @@ bool ATFGCharacter::EsActorProyectil(const AActor* Actor) const
 
 bool ATFGCharacter::EsProyectilDelJugador(const AActor* Proyectil) const
 {
-	if (!IsValid(Proyectil))
-	{
-		return false;
-	}
-
-	return ProyectilesDelJugador.Contains(Proyectil) ||
-		Proyectil->GetOwner() == this || Proyectil->GetInstigator() == this;
+	const bool bEsDelJugador = IsValid(Proyectil) &&
+		(ProyectilesDelJugador.Contains(Proyectil) ||
+		 Proyectil->GetOwner() == this || Proyectil->GetInstigator() == this);
+	return bEsDelJugador;
 }
 
 void ATFGCharacter::MarcarProyectilDelJugador(AActor* Proyectil)
@@ -2099,30 +2063,27 @@ AActor* ATFGCharacter::EncontrarObjetivoParaProyectil(
 	const float Radio) const
 {
 	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return nullptr;
-	}
-
 	AActor* MejorObjetivo = nullptr;
 	float MejorDistanciaCuadrada = FMath::Square(FMath::Max(0.0f, Radio));
-	for (TActorIterator<AActor> It(World); It; ++It)
+	if (World)
 	{
-		AActor* Candidato = *It;
-		if (!IsValid(Candidato) || Candidato == this ||
-			Candidato == ObjetivoExcluido || Candidato->IsHidden() ||
-			EsActorProyectil(Candidato) || !SoportaDanyoBlueprint(Candidato) ||
-			(ObjetivosExcluidos && ObjetivosExcluidos->Contains(Candidato)))
+		for (TActorIterator<AActor> It(World); It; ++It)
 		{
-			continue;
-		}
-
-		const float DistanciaCuadrada = FVector::DistSquared(
-			Origen, Candidato->GetActorLocation());
-		if (DistanciaCuadrada < MejorDistanciaCuadrada)
-		{
-			MejorDistanciaCuadrada = DistanciaCuadrada;
-			MejorObjetivo = Candidato;
+			AActor* Candidato = *It;
+			const bool bCandidatoValido = IsValid(Candidato) && Candidato != this &&
+				Candidato != ObjetivoExcluido && !Candidato->IsHidden() &&
+				!EsActorProyectil(Candidato) && SoportaDanyoBlueprint(Candidato) &&
+				(!ObjetivosExcluidos || !ObjetivosExcluidos->Contains(Candidato));
+			if (bCandidatoValido)
+			{
+				const float DistanciaCuadrada = FVector::DistSquared(
+					Origen, Candidato->GetActorLocation());
+				if (DistanciaCuadrada < MejorDistanciaCuadrada)
+				{
+					MejorDistanciaCuadrada = DistanciaCuadrada;
+					MejorObjetivo = Candidato;
+				}
+			}
 		}
 	}
 
@@ -2134,18 +2095,11 @@ void ATFGCharacter::RedirigirProyectil(
 	AActor* Objetivo,
 	const TCHAR* Motivo)
 {
-	if (!IsValid(Proyectil) || !IsValid(Objetivo))
+	UProjectileMovementComponent* Movimiento = IsValid(Proyectil) && IsValid(Objetivo)
+		? Proyectil->FindComponentByClass<UProjectileMovementComponent>()
+		: nullptr;
+	if (Movimiento)
 	{
-		return;
-	}
-
-	UProjectileMovementComponent* Movimiento =
-		Proyectil->FindComponentByClass<UProjectileMovementComponent>();
-	if (!Movimiento)
-	{
-		return;
-	}
-
 	const FVector PuntoObjetivo =
 		Objetivo->GetActorLocation() + FVector(0.0f, 0.0f, 45.0f);
 	const FVector Direccion =
@@ -2170,20 +2124,20 @@ void ATFGCharacter::RedirigirProyectil(
 	UE_LOG(LogCombatPowers, Display,
 		TEXT("[PROYECTIL %s] %s redirigido hacia %s a velocidad %.0f."),
 		Motivo, *GetNameSafe(Proyectil), *GetNameSafe(Objetivo), Velocidad);
+	}
 }
 
 void ATFGCharacter::ActualizarProyectilesConPoderes(const float DeltaSeconds)
 {
-	if (!bProyectilesAutoapuntado && !bProyectilesRebotan)
+	const bool bHayPoderProyectil = bProyectilesAutoapuntado || bProyectilesRebotan;
+	if (bHayPoderProyectil)
 	{
-		return;
+		AcumuladorActualizacionProyectiles += DeltaSeconds;
 	}
-
-	AcumuladorActualizacionProyectiles += DeltaSeconds;
-	if (AcumuladorActualizacionProyectiles < 0.08f || !GetWorld())
+	const bool bDebeActualizar = bHayPoderProyectil &&
+		AcumuladorActualizacionProyectiles >= 0.08f && GetWorld();
+	if (bDebeActualizar)
 	{
-		return;
-	}
 	AcumuladorActualizacionProyectiles = 0.0f;
 
 	for (auto It = ProyectilesDelJugador.CreateIterator(); It; ++It)
@@ -2199,18 +2153,11 @@ void ATFGCharacter::ActualizarProyectilesConPoderes(const float DeltaSeconds)
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 	{
 		AActor* Proyectil = *It;
-		if (!EsActorProyectil(Proyectil))
+		UProjectileMovementComponent* Movimiento = EsActorProyectil(Proyectil)
+			? Proyectil->FindComponentByClass<UProjectileMovementComponent>()
+			: nullptr;
+		if (Movimiento)
 		{
-			continue;
-		}
-
-		UProjectileMovementComponent* Movimiento =
-			Proyectil->FindComponentByClass<UProjectileMovementComponent>();
-		if (!Movimiento)
-		{
-			continue;
-		}
-
 		bool bEsDelJugador = EsProyectilDelJugador(Proyectil);
 		if (!bEsDelJugador && !IsValid(Proyectil->GetOwner()) &&
 			!IsValid(Proyectil->GetInstigator()))
@@ -2227,21 +2174,22 @@ void ATFGCharacter::ActualizarProyectilesConPoderes(const float DeltaSeconds)
 			}
 		}
 
-		if (!bEsDelJugador || !bProyectilesAutoapuntado ||
-			(Movimiento->bIsHomingProjectile &&
-			 Movimiento->HomingTargetComponent.IsValid()))
+		const bool bNecesitaObjetivo = bEsDelJugador && bProyectilesAutoapuntado &&
+			(!Movimiento->bIsHomingProjectile ||
+			 !Movimiento->HomingTargetComponent.IsValid());
+		if (bNecesitaObjetivo)
 		{
-			continue;
+			const TSet<TWeakObjectPtr<AActor>>* Excluidos =
+				ObjetivosPorProyectil.Find(Proyectil);
+			if (AActor* Objetivo = EncontrarObjetivoParaProyectil(
+				Proyectil->GetActorLocation(), nullptr, Excluidos,
+				RadioAutoapuntadoProyectil))
+			{
+				RedirigirProyectil(Proyectil, Objetivo, TEXT("AUTOAPUNTADO"));
+			}
 		}
-
-		const TSet<TWeakObjectPtr<AActor>>* Excluidos =
-			ObjetivosPorProyectil.Find(Proyectil);
-		if (AActor* Objetivo = EncontrarObjetivoParaProyectil(
-			Proyectil->GetActorLocation(), nullptr, Excluidos,
-			RadioAutoapuntadoProyectil))
-		{
-			RedirigirProyectil(Proyectil, Objetivo, TEXT("AUTOAPUNTADO"));
 		}
+	}
 	}
 }
 
@@ -2265,12 +2213,10 @@ void ATFGCharacter::ActualizarVisualesProyectiles(const float DeltaSeconds)
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 	{
 		AActor* Proyectil = *It;
-		if (!EsActorProyectil(Proyectil) ||
-			ProyectilesVisualesConfigurados.Contains(Proyectil))
+		const bool bPendienteConfigurar = EsActorProyectil(Proyectil) &&
+			!ProyectilesVisualesConfigurados.Contains(Proyectil);
+		if (bPendienteConfigurar)
 		{
-			continue;
-		}
-
 		AActor* Lanzador = Proyectil->GetInstigator();
 		if (!IsValid(Lanzador))
 		{
@@ -2298,39 +2244,40 @@ void ATFGCharacter::ActualizarVisualesProyectiles(const float DeltaSeconds)
 
 		const bool bEsMordred = IsValid(Lanzador) &&
 			Lanzador->GetClass()->GetName().Contains(TEXT("Mordred"), ESearchCase::IgnoreCase);
-		if (!bEsArturo && !bEsMordred)
+		if (bEsArturo || bEsMordred)
 		{
-			continue;
-		}
-
-		ProyectilesVisualesConfigurados.Add(Proyectil);
-		if (bEsArturo)
-		{
-			const float Ahora = GetWorld()->GetTimeSeconds();
-			if (Ahora - UltimoProyectilArturoAceptado < EnfriamientoProyectilArturo)
+			ProyectilesVisualesConfigurados.Add(Proyectil);
+			if (bEsArturo)
 			{
-				ProyectilesDelJugador.Remove(Proyectil);
-				ObjetivosPorProyectil.Remove(Proyectil);
-				RebotesPorProyectil.Remove(Proyectil);
-				UE_LOG(LogCombatPowers, Display,
-					TEXT("[ARTURO] Proyectil cancelado: cooldown %.2f s."),
-					EnfriamientoProyectilArturo);
-				Proyectil->Destroy();
-				continue;
+				const float Ahora = GetWorld()->GetTimeSeconds();
+				if (Ahora - UltimoProyectilArturoAceptado < EnfriamientoProyectilArturo)
+				{
+					ProyectilesDelJugador.Remove(Proyectil);
+					ObjetivosPorProyectil.Remove(Proyectil);
+					RebotesPorProyectil.Remove(Proyectil);
+					UE_LOG(LogCombatPowers, Display,
+						TEXT("[ARTURO] Proyectil cancelado: cooldown %.2f s."),
+						EnfriamientoProyectilArturo);
+					Proyectil->Destroy();
+				}
+				else
+				{
+					UltimoProyectilArturoAceptado = Ahora;
+					ConfigurarDestelloProyectil(
+						Proyectil,
+						FLinearColor(1.0f, 0.76f, 0.22f, 1.0f),
+						TEXT("ARTURO"));
+					ReproducirAnimacionLanzamiento();
+				}
 			}
-			UltimoProyectilArturoAceptado = Ahora;
-			ConfigurarDestelloProyectil(
-				Proyectil,
-				FLinearColor(1.0f, 0.76f, 0.22f, 1.0f),
-				TEXT("ARTURO"));
-			ReproducirAnimacionLanzamiento();
+			else
+			{
+				ConfigurarDestelloProyectil(
+					Proyectil,
+					FLinearColor(1.0f, 0.025f, 0.01f, 1.0f),
+					TEXT("MORDRED"));
+			}
 		}
-		else
-		{
-			ConfigurarDestelloProyectil(
-				Proyectil,
-				FLinearColor(1.0f, 0.025f, 0.01f, 1.0f),
-				TEXT("MORDRED"));
 		}
 	}
 }
@@ -2467,45 +2414,41 @@ void ATFGCharacter::DesviarProyectilesEnAtaque(
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 	{
 		AActor* Proyectil = *It;
-		if (!EsActorProyectil(Proyectil) || EsProyectilDelJugador(Proyectil) ||
+		const bool bDentroDelAtaque = EsActorProyectil(Proyectil) &&
+			!EsProyectilDelJugador(Proyectil) &&
 			FMath::PointDistToSegmentSquared(
-				Proyectil->GetActorLocation(), Inicio, Fin) >
-			FMath::Square(RadioDesvioProyectil))
+				Proyectil->GetActorLocation(), Inicio, Fin) <=
+			FMath::Square(RadioDesvioProyectil);
+		UProjectileMovementComponent* Movimiento = bDentroDelAtaque
+			? Proyectil->FindComponentByClass<UProjectileMovementComponent>()
+			: nullptr;
+		if (Movimiento)
 		{
-			continue;
-		}
+			MarcarProyectilDelJugador(Proyectil);
+			AActor* Objetivo = EncontrarObjetivoParaProyectil(
+				Proyectil->GetActorLocation(), nullptr, nullptr,
+				RadioAutoapuntadoProyectil);
+			if (Objetivo)
+			{
+				RedirigirProyectil(Proyectil, Objetivo, TEXT("DESVIO"));
+			}
+			else
+			{
+				const float Velocidad = FMath::Max(1200.0f, Movimiento->Velocity.Size());
+				Movimiento->Velocity = GetActorForwardVector().GetSafeNormal() * Velocidad;
+				Movimiento->bRotationFollowsVelocity = true;
+				Movimiento->UpdateComponentVelocity();
+				Proyectil->SetActorRotation(Movimiento->Velocity.Rotation());
+			}
 
-		UProjectileMovementComponent* Movimiento =
-			Proyectil->FindComponentByClass<UProjectileMovementComponent>();
-		if (!Movimiento)
-		{
-			continue;
-		}
-
-		MarcarProyectilDelJugador(Proyectil);
-		AActor* Objetivo = EncontrarObjetivoParaProyectil(
-			Proyectil->GetActorLocation(), nullptr, nullptr,
-			RadioAutoapuntadoProyectil);
-		if (Objetivo)
-		{
-			RedirigirProyectil(Proyectil, Objetivo, TEXT("DESVIO"));
-		}
-		else
-		{
-			const float Velocidad = FMath::Max(1200.0f, Movimiento->Velocity.Size());
-			Movimiento->Velocity = GetActorForwardVector().GetSafeNormal() * Velocidad;
-			Movimiento->bRotationFollowsVelocity = true;
-			Movimiento->UpdateComponentVelocity();
-			Proyectil->SetActorRotation(Movimiento->Velocity.Rotation());
-		}
-
-		UE_LOG(LogCombatPowers, Display,
-			TEXT("[DESVIO] Ataque reflejo el proyectil %s."),
-			*GetNameSafe(Proyectil));
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(
-				-1, 1.2f, FColor::Cyan, TEXT("PROYECTIL DESVIADO"));
+			UE_LOG(LogCombatPowers, Display,
+				TEXT("[DESVIO] Ataque reflejo el proyectil %s."),
+				*GetNameSafe(Proyectil));
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(
+					-1, 1.2f, FColor::Cyan, TEXT("PROYECTIL DESVIADO"));
+			}
 		}
 	}
 }
@@ -2532,13 +2475,17 @@ void ATFGCharacter::RealizarTrazaAtaqueJugador(const bool bGolpeConCuerpo)
 	if (!bGolpeConCuerpo)
 	{
 		TInlineComponentArray<USkeletalMeshComponent*> Mallas(this);
-		for (USkeletalMeshComponent* Malla : Mallas)
+		int32 IndiceMalla = 0;
+		bool bArmaEncontrada = false;
+		while (IndiceMalla < Mallas.Num() && !bArmaEncontrada)
 		{
+			USkeletalMeshComponent* Malla = Mallas[IndiceMalla];
 			if (Malla && Malla->GetFName() == TEXT("ArmaEquipada"))
 			{
 				ComponenteTraza = Malla;
-				break;
+				bArmaEncontrada = true;
 			}
+			++IndiceMalla;
 		}
 	}
 
@@ -2592,39 +2539,40 @@ void ATFGCharacter::RealizarTrazaAtaqueJugador(const bool bGolpeConCuerpo)
 	for (const FHitResult& Impacto : Impactos)
 	{
 		AActor* Objetivo = Impacto.GetActor();
-		if (!IsValid(Objetivo) || Objetivo == this || ObjetivosDeEstaTraza.Contains(Objetivo) ||
-			!SoportaDanyoBlueprint(Objetivo))
+		const bool bObjetivoValido = IsValid(Objetivo) && Objetivo != this &&
+			!ObjetivosDeEstaTraza.Contains(Objetivo) && SoportaDanyoBlueprint(Objetivo);
+		if (bObjetivoValido)
 		{
-			continue;
+			ObjetivosDeEstaTraza.Add(Objetivo);
+			const float* UltimoImpacto = UltimosImpactosAtaque.Find(Objetivo);
+			const bool bPuedeRecibirGolpe = !UltimoImpacto || Ahora - *UltimoImpacto >= 0.55f;
+			if (bPuedeRecibirGolpe)
+			{
+				UltimosImpactosAtaque.Add(Objetivo, Ahora);
+				const float DanyoBase = bGolpeConCuerpo ? 10.0f : 25.0f;
+				AplicarGolpeConPoderes(Objetivo, DanyoBase, false);
+				UE_LOG(
+					LogCombatPowers,
+					Display,
+					TEXT("[ATAQUE] Traza %s impacto a %s por %.1f."),
+					bGolpeConCuerpo ? TEXT("cuerpo/patada") : TEXT("espada"),
+					*GetNameSafe(Objetivo),
+					DanyoBase);
+			}
 		}
-
-		ObjetivosDeEstaTraza.Add(Objetivo);
-		if (const float* UltimoImpacto = UltimosImpactosAtaque.Find(Objetivo);
-			UltimoImpacto && Ahora - *UltimoImpacto < 0.55f)
-		{
-			continue;
-		}
-
-		UltimosImpactosAtaque.Add(Objetivo, Ahora);
-		const float DanyoBase = bGolpeConCuerpo ? 10.0f : 25.0f;
-		AplicarGolpeConPoderes(Objetivo, DanyoBase, false);
-		UE_LOG(
-			LogCombatPowers,
-			Display,
-			TEXT("[ATAQUE] Traza %s impacto a %s por %.1f."),
-			bGolpeConCuerpo ? TEXT("cuerpo/patada") : TEXT("espada"),
-			*GetNameSafe(Objetivo),
-			DanyoBase);
 	}
 }
 
 float ATFGCharacter::ProcesarDanyoRecibido(float DanyoBase)
 {
+	float DanyoResultado = 0.0f;
 	if (bMuerteEnCurso)
 	{
-		return 0.0f;
+		UE_LOG(LogCombatPowers, Verbose,
+			TEXT("Dano ignorado porque la muerte del personaje ya esta en curso."));
 	}
-
+	else
+	{
 	const float DanyoSeguro = FMath::Max(0.0f, DanyoBase);
 	float DanyoProcesado = DanyoSeguro;
 	AActor* FuenteDanyo = FuenteDanyoPendiente.Get();
@@ -2660,7 +2608,7 @@ float ATFGCharacter::ProcesarDanyoRecibido(float DanyoBase)
 	if (bEsquivaActiva && DanyoProcesado > 0.0f && FMath::FRand() <= ProbabilidadEsquiva)
 	{
 		UE_LOG(LogCombatPowers, Display, TEXT("[NUEVO PODER 4] ESQUIVA: golpe de %.1f dano anulado."), DanyoProcesado);
-		return 0.0f;
+		DanyoProcesado = 0.0f;
 	}
 
 	if (bInversionDanyoActiva && bInversionDanyoPreparada && DanyoProcesado > 0.0f)
@@ -2671,12 +2619,12 @@ float ATFGCharacter::ProcesarDanyoRecibido(float DanyoBase)
 			EnfriamientoInversionDanyo, false);
 		UE_LOG(LogCombatPowers, Display, TEXT("[NUEVO PODER 5] Golpe de %.1f convertido en %.1f de curacion; recarga %.1f s."),
 			DanyoProcesado, CuracionReal, EnfriamientoInversionDanyo);
-		return 0.0f;
+		DanyoProcesado = 0.0f;
 	}
 
 	if (bTieneVidaExtra && ConsumirVidaExtraSiEsMortal(DanyoProcesado))
 	{
-		return 0.0f;
+		DanyoProcesado = 0.0f;
 	}
 
 	if (DanyoProcesado > 0.0f)
@@ -2717,7 +2665,9 @@ float ATFGCharacter::ProcesarDanyoRecibido(float DanyoBase)
 	}
 
 	UE_LOG(LogCombatPowers, Display, TEXT("Dano recibido por %s: %.1f."), *GetNameSafe(this), DanyoProcesado);
-	return DanyoProcesado;
+	DanyoResultado = DanyoProcesado;
+	}
+	return DanyoResultado;
 }
 
 void ATFGCharacter::IniciarMuerteDefinitiva()
@@ -2814,39 +2764,29 @@ void ATFGCharacter::FinalizarMuerteYVolverLobby()
 
 bool ATFGCharacter::ProcesarImpactoProyectil(AActor* Proyectil, AActor* Objetivo, float DanyoBase)
 {
-	if (!IsValid(Proyectil) || !IsValid(Objetivo) || Objetivo == Proyectil)
-	{
-		return false;
-	}
-
-	AActor* Fuente = Proyectil->GetInstigator();
+	bool bDestruirProyectil = false;
+	const bool bImpactoValido = IsValid(Proyectil) && IsValid(Objetivo) &&
+		Objetivo != Proyectil;
+	AActor* Fuente = bImpactoValido ? Proyectil->GetInstigator() : nullptr;
 	if (!IsValid(Fuente))
 	{
 		Fuente = Proyectil->GetOwner();
 	}
 
 	// Ignore the projectile while it still overlaps its owner at spawn.
-	if (Objetivo == Fuente || (Fuente == this && Objetivo == this))
+	const bool bImpactaAlLanzador = bImpactoValido &&
+		(Objetivo == Fuente || (Fuente == this && Objetivo == this));
+	if (bImpactoValido && !bImpactaAlLanzador && Objetivo == this && Fuente != this)
 	{
-		return false;
-	}
-
-	if (Objetivo == this)
-	{
-		if (Fuente == this)
-		{
-			return false;
-		}
-
 		RegistrarFuenteDanyo(IsValid(Fuente) ? Fuente : Proyectil);
-		const bool bAplicado = EnviarDanyoBlueprint(this, DanyoBase);
-		if (bAplicado)
+		bDestruirProyectil = EnviarDanyoBlueprint(this, DanyoBase);
+		if (bDestruirProyectil)
 		{
 			UE_LOG(LogCombatPowers, Display, TEXT("Proyectil enemigo %s impacto al jugador por %.1f dano base."), *GetNameSafe(Proyectil), DanyoBase);
 		}
-		return bAplicado;
 	}
-
+	else if (bImpactoValido && !bImpactaAlLanzador && Objetivo != this)
+	{
 	// BP_Proyectil is also used by Blueprint spawn paths that do not always set
 	// Owner or Instigator. The overlap itself is authoritative here: every
 	// non-player actor that implements RecibirDanyo is a valid enemy target.
@@ -2854,6 +2794,7 @@ bool ATFGCharacter::ProcesarImpactoProyectil(AActor* Proyectil, AActor* Objetivo
 	{
 		const bool bProyectilJugador = Fuente == this ||
 			EsProyectilDelJugador(Proyectil) || !IsValid(Fuente);
+		bool bObjetivoYaGolpeado = false;
 		if (bProyectilJugador)
 		{
 			MarcarProyectilDelJugador(Proyectil);
@@ -2861,14 +2802,20 @@ bool ATFGCharacter::ProcesarImpactoProyectil(AActor* Proyectil, AActor* Objetivo
 				ObjetivosPorProyectil.FindOrAdd(Proyectil);
 			if (ObjetivosGolpeados.Contains(Objetivo))
 			{
-				return false;
+				bObjetivoYaGolpeado = true;
 			}
-			ObjetivosGolpeados.Add(Objetivo);
+			else
+			{
+				ObjetivosGolpeados.Add(Objetivo);
+			}
 		}
 
+		if (!bObjetivoYaGolpeado)
+		{
 		UE_LOG(LogCombatPowers, Display, TEXT("[PROYECTIL] %s impacto a %s: aplicando %.1f dano base."),
 			*GetNameSafe(Proyectil), *GetNameSafe(Objetivo), DanyoBase);
 		AplicarGolpeConPoderes(Objetivo, DanyoBase, true);
+		bDestruirProyectil = true;
 
 		if (bProyectilJugador && bProyectilesRebotan)
 		{
@@ -2893,20 +2840,22 @@ bool ATFGCharacter::ProcesarImpactoProyectil(AActor* Proyectil, AActor* Objetivo
 							Movimiento->Velocity.GetSafeNormal() * 75.0f,
 							false);
 					}
-					return false;
+					bDestruirProyectil = false;
 				}
 			}
 			UE_LOG(LogCombatPowers, Display,
 				TEXT("[REBOTE] %s termina su cadena tras %d rebotes: no quedan objetivos validos."),
 				*GetNameSafe(Proyectil), NumeroRebotes);
 		}
-		return true;
+		}
 	}
-
-	UE_LOG(LogCombatPowers, Verbose, TEXT("[PROYECTIL] %s impacto a %s, pero el objetivo no implementa RecibirDanyo."),
-		*GetNameSafe(Proyectil), *GetNameSafe(Objetivo));
-
-	return false;
+	else
+	{
+		UE_LOG(LogCombatPowers, Verbose, TEXT("[PROYECTIL] %s impacto a %s, pero el objetivo no implementa RecibirDanyo."),
+			*GetNameSafe(Proyectil), *GetNameSafe(Objetivo));
+	}
+	}
+	return bDestruirProyectil;
 }
 
 void ATFGCharacter::IniciarQuemadura(AActor* Objetivo)
@@ -2930,19 +2879,14 @@ void ATFGCharacter::IniciarQuemadura(AActor* Objetivo)
 void ATFGCharacter::TickQuemadura(TWeakObjectPtr<AActor> Objetivo)
 {
 	FQuemaduraActiva* Estado = QuemadurasActivas.Find(Objetivo);
-	if (!Estado)
-	{
-		return;
-	}
-
-	AActor* ActorObjetivo = Objetivo.Get();
-	if (!IsValid(ActorObjetivo))
+	AActor* ActorObjetivo = Estado ? Objetivo.Get() : nullptr;
+	if (Estado && !IsValid(ActorObjetivo))
 	{
 		GetWorldTimerManager().ClearTimer(Estado->Timer);
 		QuemadurasActivas.Remove(Objetivo);
-		return;
 	}
-
+	else if (Estado)
+	{
 	const float DanyoTick = DanyoTotalQuemadura / FMath::Max(1, NumeroTicksQuemadura);
 	const bool bDanyoAplicado = EnviarDanyoBlueprint(ActorObjetivo, DanyoTick);
 	if (bDanyoAplicado && bRoboVidaActivo)
@@ -2958,6 +2902,7 @@ void ATFGCharacter::TickQuemadura(TWeakObjectPtr<AActor> Objetivo)
 		GetWorldTimerManager().ClearTimer(Estado->Timer);
 		QuemadurasActivas.Remove(Objetivo);
 		UE_LOG(LogCombatPowers, Display, TEXT("[PODER 2] Quemadura terminada en %s."), *GetNameSafe(ActorObjetivo));
+	}
 	}
 }
 
@@ -3290,21 +3235,23 @@ void ATFGCharacter::RegenerarMana()
 float ATFGCharacter::ObtenerManaActual() const
 {
 	using namespace CombatPowerHelpers;
+	float ManaActual = 0.0f;
 	if (UActorComponent* Componente = BuscarComponenteRecurso(TEXT("ManaActual"), TEXT("ManaMaximo")))
 	{
-		return static_cast<float>(ReadNumericProperty(Componente, FindNumericProperty(Componente, TEXT("ManaActual"))));
+		ManaActual = static_cast<float>(ReadNumericProperty(Componente, FindNumericProperty(Componente, TEXT("ManaActual"))));
 	}
-	return 0.0f;
+	return ManaActual;
 }
 
 float ATFGCharacter::ObtenerStaminaActual() const
 {
 	using namespace CombatPowerHelpers;
+	float StaminaActual = 0.0f;
 	if (UActorComponent* Componente = BuscarComponenteRecurso(TEXT("StaminaActual"), TEXT("StaminaMax")))
 	{
-		return static_cast<float>(ReadNumericProperty(Componente, FindNumericProperty(Componente, TEXT("StaminaActual"))));
+		StaminaActual = static_cast<float>(ReadNumericProperty(Componente, FindNumericProperty(Componente, TEXT("StaminaActual"))));
 	}
-	return 0.0f;
+	return StaminaActual;
 }
 
 void ATFGCharacter::GuardarRecolectable(
@@ -3398,36 +3345,35 @@ bool ATFGCharacter::ConsumirStamina(float Cantidad)
 {
 	using namespace CombatPowerHelpers;
 	UActorComponent* Componente = BuscarComponenteRecurso(TEXT("StaminaActual"), TEXT("StaminaMax"));
+	bool bStaminaConsumida = false;
 	if (!Componente)
 	{
 		UE_LOG(LogCombatPowers, Warning, TEXT("[STAMINA] No se encontro BP_BarraStamina."));
-		return false;
 	}
-
-	FNumericProperty* ActualProperty = FindNumericProperty(Componente, TEXT("StaminaActual"));
-	FNumericProperty* MaximoProperty = FindNumericProperty(Componente, TEXT("StaminaMax"));
-	const double Actual = ReadNumericProperty(Componente, ActualProperty);
-	const double Maximo = ReadNumericProperty(Componente, MaximoProperty);
-	if (Actual < Cantidad)
+	else
 	{
-		return false;
+		FNumericProperty* ActualProperty = FindNumericProperty(Componente, TEXT("StaminaActual"));
+		FNumericProperty* MaximoProperty = FindNumericProperty(Componente, TEXT("StaminaMax"));
+		const double Actual = ReadNumericProperty(Componente, ActualProperty);
+		const double Maximo = ReadNumericProperty(Componente, MaximoProperty);
+		if (Actual >= Cantidad)
+		{
+			const double Nuevo = FMath::Max(0.0, Actual - Cantidad);
+			WriteNumericProperty(Componente, ActualProperty, Nuevo);
+			ActualizarHUDRecurso(TEXT("CambiarStamina"), Maximo > 0.0 ? Nuevo / Maximo : 0.0f);
+			bStaminaConsumida = true;
+		}
 	}
-
-	const double Nuevo = FMath::Max(0.0, Actual - Cantidad);
-	WriteNumericProperty(Componente, ActualProperty, Nuevo);
-	ActualizarHUDRecurso(TEXT("CambiarStamina"), Maximo > 0.0 ? Nuevo / Maximo : 0.0f);
-	return true;
+	return bStaminaConsumida;
 }
 
 float ATFGCharacter::CurarPersonaje(float Cantidad, const TCHAR* Motivo)
 {
 	using namespace CombatPowerHelpers;
 	UActorComponent* ComponenteVida = BuscarComponenteVida();
-	if (!ComponenteVida || Cantidad <= 0.0f)
+	float CuracionReal = 0.0f;
+	if (ComponenteVida && Cantidad > 0.0f)
 	{
-		return 0.0f;
-	}
-
 	FNumericProperty* ActualProperty = FindNumericProperty(ComponenteVida, TEXT("VidaActual"));
 	FNumericProperty* MaximaProperty = FindNumericProperty(ComponenteVida, TEXT("VidaMaxima"));
 	const double VidaAnterior = ReadNumericProperty(ComponenteVida, ActualProperty);
@@ -3441,9 +3387,10 @@ float ATFGCharacter::CurarPersonaje(float Cantidad, const TCHAR* Motivo)
 	}
 
 	ActualizarHUDRecurso(TEXT("CambiarVida"), VidaMaxima > 0.0 ? VidaNueva / VidaMaxima : 0.0f);
-	const float CuracionReal = static_cast<float>(VidaNueva - VidaAnterior);
+	CuracionReal = static_cast<float>(VidaNueva - VidaAnterior);
 	UE_LOG(LogCombatPowers, Display, TEXT("[CURACION] %s: +%.1f de vida (%.1f -> %.1f / %.1f)."),
 		Motivo, CuracionReal, VidaAnterior, VidaNueva, VidaMaxima);
+	}
 	return CuracionReal;
 }
 
@@ -3454,17 +3401,16 @@ AActor* ATFGCharacter::BuscarFuenteDanyoCercana() const
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 	{
 		AActor* Candidato = *It;
-		if (!IsValid(Candidato) || Candidato == this ||
-			!FindFProperty<FNumericProperty>(Candidato->GetClass(), TEXT("DanyoAtaqueBase")))
+		const bool bCandidatoValido = IsValid(Candidato) && Candidato != this &&
+			FindFProperty<FNumericProperty>(Candidato->GetClass(), TEXT("DanyoAtaqueBase"));
+		if (bCandidatoValido)
 		{
-			continue;
-		}
-
-		const float DistanciaCuadrada = FVector::DistSquared2D(GetActorLocation(), Candidato->GetActorLocation());
-		if (DistanciaCuadrada < DistanciaCuadradaMinima)
-		{
-			DistanciaCuadradaMinima = DistanciaCuadrada;
-			FuenteMasCercana = Candidato;
+			const float DistanciaCuadrada = FVector::DistSquared2D(GetActorLocation(), Candidato->GetActorLocation());
+			if (DistanciaCuadrada < DistanciaCuadradaMinima)
+			{
+				DistanciaCuadradaMinima = DistanciaCuadrada;
+				FuenteMasCercana = Candidato;
+			}
 		}
 	}
 	return FuenteMasCercana;
@@ -3475,79 +3421,75 @@ void ATFGCharacter::ActualizarHUDRecurso(FName Funcion, float Porcentaje) const
 	const FObjectPropertyBase* WidgetProperty = FindFProperty<FObjectPropertyBase>(GetClass(), TEXT("InterfazGrafica"));
 	UObject* Widget = WidgetProperty ? WidgetProperty->GetObjectPropertyValue_InContainer(this) : nullptr;
 	UFunction* FuncionHUD = Widget ? Widget->FindFunction(Funcion) : nullptr;
-	if (!FuncionHUD)
+	if (FuncionHUD)
 	{
-		return;
-	}
-
-	uint8* Parametros = static_cast<uint8*>(FMemory_Alloca(FuncionHUD->ParmsSize));
-	FMemory::Memzero(Parametros, FuncionHUD->ParmsSize);
-	for (TFieldIterator<FProperty> It(FuncionHUD); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
-	{
-		FProperty* Property = *It;
-		if (Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
+		uint8* Parametros = static_cast<uint8*>(FMemory_Alloca(FuncionHUD->ParmsSize));
+		FMemory::Memzero(Parametros, FuncionHUD->ParmsSize);
+		bool bParametroActualizado = false;
+		TFieldIterator<FProperty> It(FuncionHUD);
+		while (It && It->HasAnyPropertyFlags(CPF_Parm) && !bParametroActualizado)
 		{
-			continue;
-		}
-		if (FNumericProperty* NumericProperty = CastField<FNumericProperty>(Property))
-		{
-			void* DireccionValor = NumericProperty->ContainerPtrToValuePtr<void>(Parametros);
-			NumericProperty->SetFloatingPointPropertyValue(DireccionValor, Porcentaje);
-			Widget->ProcessEvent(FuncionHUD, Parametros);
-			return;
+			FProperty* Property = *It;
+			if (!Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
+			{
+				if (FNumericProperty* NumericProperty = CastField<FNumericProperty>(Property))
+				{
+					void* DireccionValor = NumericProperty->ContainerPtrToValuePtr<void>(Parametros);
+					NumericProperty->SetFloatingPointPropertyValue(DireccionValor, Porcentaje);
+					Widget->ProcessEvent(FuncionHUD, Parametros);
+					bParametroActualizado = true;
+				}
+			}
+			++It;
 		}
 	}
 }
 
 bool ATFGCharacter::EnviarDanyoBlueprint(AActor* Objetivo, float Danyo) const
 {
-	if (!IsValid(Objetivo))
-	{
-		return false;
-	}
-
-	UFunction* FuncionDanyo = Objetivo->FindFunction(TEXT("RecibirDanyo"));
-	if (!FuncionDanyo)
-	{
-		return false;
-	}
-
-	uint8* Parametros = static_cast<uint8*>(FMemory_Alloca(FuncionDanyo->ParmsSize));
-	FMemory::Memzero(Parametros, FuncionDanyo->ParmsSize);
-
+	UFunction* FuncionDanyo = IsValid(Objetivo)
+		? Objetivo->FindFunction(TEXT("RecibirDanyo"))
+		: nullptr;
 	bool bParametroAsignado = false;
-	for (TFieldIterator<FProperty> It(FuncionDanyo); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+	uint8* Parametros = FuncionDanyo
+		? static_cast<uint8*>(FMemory_Alloca(FuncionDanyo->ParmsSize))
+		: nullptr;
+	if (FuncionDanyo)
 	{
-		FProperty* Property = *It;
-		if (Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
+		FMemory::Memzero(Parametros, FuncionDanyo->ParmsSize);
+		TFieldIterator<FProperty> It(FuncionDanyo);
+		while (It && It->HasAnyPropertyFlags(CPF_Parm) && !bParametroAsignado)
 		{
-			continue;
-		}
-
-		if (FNumericProperty* NumericProperty = CastField<FNumericProperty>(Property))
-		{
-			void* ValueAddress = NumericProperty->ContainerPtrToValuePtr<void>(Parametros);
-			if (NumericProperty->IsFloatingPoint())
+			FProperty* Property = *It;
+			if (!Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm))
 			{
-				NumericProperty->SetFloatingPointPropertyValue(ValueAddress, Danyo);
+				if (FNumericProperty* NumericProperty = CastField<FNumericProperty>(Property))
+				{
+					void* ValueAddress = NumericProperty->ContainerPtrToValuePtr<void>(Parametros);
+					if (NumericProperty->IsFloatingPoint())
+					{
+						NumericProperty->SetFloatingPointPropertyValue(ValueAddress, Danyo);
+					}
+					else
+					{
+						NumericProperty->SetIntPropertyValue(ValueAddress, FMath::RoundToInt64(Danyo));
+					}
+					bParametroAsignado = true;
+				}
 			}
-			else
-			{
-				NumericProperty->SetIntPropertyValue(ValueAddress, FMath::RoundToInt64(Danyo));
-			}
-			bParametroAsignado = true;
-			break;
+			++It;
 		}
 	}
 
-	if (!bParametroAsignado)
+	if (FuncionDanyo && !bParametroAsignado)
 	{
 		UE_LOG(LogCombatPowers, Error, TEXT("RecibirDanyo en %s no tiene un parametro numerico compatible."), *GetNameSafe(Objetivo));
-		return false;
 	}
-
-	Objetivo->ProcessEvent(FuncionDanyo, Parametros);
-	return true;
+	else if (bParametroAsignado)
+	{
+		Objetivo->ProcessEvent(FuncionDanyo, Parametros);
+	}
+	return bParametroAsignado;
 }
 
 bool ATFGCharacter::SoportaDanyoBlueprint(const AActor* Objetivo) const
@@ -3558,71 +3500,80 @@ bool ATFGCharacter::SoportaDanyoBlueprint(const AActor* Objetivo) const
 UActorComponent* ATFGCharacter::BuscarComponenteVida() const
 {
 	TInlineComponentArray<UActorComponent*> Componentes(const_cast<ATFGCharacter*>(this));
-	for (UActorComponent* Componente : Componentes)
+	UActorComponent* ComponenteVida = nullptr;
+	int32 IndiceComponente = 0;
+	while (IndiceComponente < Componentes.Num() && !ComponenteVida)
 	{
+		UActorComponent* Componente = Componentes[IndiceComponente];
 		if (Componente && FindFProperty<FNumericProperty>(Componente->GetClass(), TEXT("VidaActual")) &&
 			FindFProperty<FNumericProperty>(Componente->GetClass(), TEXT("VidaMaxima")))
 		{
-			return Componente;
+			ComponenteVida = Componente;
 		}
+		++IndiceComponente;
 	}
-	return nullptr;
+	return ComponenteVida;
 }
 
 UActorComponent* ATFGCharacter::BuscarComponenteRecurso(FName PropiedadActual, FName PropiedadMaxima) const
 {
 	TInlineComponentArray<UActorComponent*> Componentes(const_cast<ATFGCharacter*>(this));
-	for (UActorComponent* Componente : Componentes)
+	UActorComponent* ComponenteRecurso = nullptr;
+	int32 IndiceComponente = 0;
+	while (IndiceComponente < Componentes.Num() && !ComponenteRecurso)
 	{
+		UActorComponent* Componente = Componentes[IndiceComponente];
 		if (Componente && FindFProperty<FNumericProperty>(Componente->GetClass(), PropiedadActual) &&
 			FindFProperty<FNumericProperty>(Componente->GetClass(), PropiedadMaxima))
 		{
-			return Componente;
+			ComponenteRecurso = Componente;
 		}
+		++IndiceComponente;
 	}
-	return nullptr;
+	return ComponenteRecurso;
 }
 
 bool ATFGCharacter::ConsumirVidaExtraSiEsMortal(float DanyoProcesado)
 {
 	using namespace CombatPowerHelpers;
 	UActorComponent* ComponenteVida = BuscarComponenteVida();
+	bool bVidaExtraConsumida = false;
 	if (!ComponenteVida)
 	{
 		UE_LOG(LogCombatPowers, Warning, TEXT("[PODER 7] No se encontro BP_BarraVida para comprobar el dano mortal."));
-		return false;
 	}
-
-	FNumericProperty* VidaActualProperty = FindNumericProperty(ComponenteVida, TEXT("VidaActual"));
-	FNumericProperty* VidaMaximaProperty = FindNumericProperty(ComponenteVida, TEXT("VidaMaxima"));
-	const double VidaActual = ReadNumericProperty(ComponenteVida, VidaActualProperty);
-	if (DanyoProcesado < VidaActual)
+	else
 	{
-		return false;
-	}
-
-	const double VidaMaxima = ReadNumericProperty(ComponenteVida, VidaMaximaProperty);
-	WriteNumericProperty(ComponenteVida, VidaActualProperty, VidaMaxima);
-	if (FBoolProperty* MuertoProperty = FindFProperty<FBoolProperty>(ComponenteVida->GetClass(), TEXT("EstoyMuerto")))
-	{
-		MuertoProperty->SetPropertyValue_InContainer(ComponenteVida, false);
-	}
-
-	bTieneVidaExtra = false;
-	if (bVidaExtraPermanenteAsignada)
-	{
-		if (UGameInstance* GameInstance = GetGameInstance())
+		FNumericProperty* VidaActualProperty = FindNumericProperty(ComponenteVida, TEXT("VidaActual"));
+		FNumericProperty* VidaMaximaProperty = FindNumericProperty(ComponenteVida, TEXT("VidaMaxima"));
+		const double VidaActual = ReadNumericProperty(ComponenteVida, VidaActualProperty);
+		if (DanyoProcesado >= VidaActual)
 		{
-			if (URunPowerPersistenceSubsystem* Persistence =
-				GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>())
+			const double VidaMaxima = ReadNumericProperty(ComponenteVida, VidaMaximaProperty);
+			WriteNumericProperty(ComponenteVida, VidaActualProperty, VidaMaxima);
+			if (FBoolProperty* MuertoProperty = FindFProperty<FBoolProperty>(ComponenteVida->GetClass(), TEXT("EstoyMuerto")))
 			{
-				Persistence->ConsumePermanentRevive();
+				MuertoProperty->SetPropertyValue_InContainer(ComponenteVida, false);
 			}
+
+			bTieneVidaExtra = false;
+			if (bVidaExtraPermanenteAsignada)
+			{
+				if (UGameInstance* GameInstance = GetGameInstance())
+				{
+					if (URunPowerPersistenceSubsystem* Persistence =
+						GameInstance->GetSubsystem<URunPowerPersistenceSubsystem>())
+					{
+						Persistence->ConsumePermanentRevive();
+					}
+				}
+				bVidaExtraPermanenteAsignada = false;
+			}
+			GuardarEstadoPoderesPersistentes(TEXT("vida extra consumida"));
+			UE_LOG(LogCombatPowers, Display, TEXT("[PODER 7] VIDA EXTRA CONSUMIDA: dano mortal %.1f anulado y vida restaurada a %.1f."),
+				DanyoProcesado, VidaMaxima);
+			bVidaExtraConsumida = true;
 		}
-		bVidaExtraPermanenteAsignada = false;
 	}
-	GuardarEstadoPoderesPersistentes(TEXT("vida extra consumida"));
-	UE_LOG(LogCombatPowers, Display, TEXT("[PODER 7] VIDA EXTRA CONSUMIDA: dano mortal %.1f anulado y vida restaurada a %.1f."),
-		DanyoProcesado, VidaMaxima);
-	return true;
+	return bVidaExtraConsumida;
 }

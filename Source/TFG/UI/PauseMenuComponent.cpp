@@ -49,31 +49,22 @@ void UPauseMenuComponent::TogglePauseMenu()
 
 void UPauseMenuComponent::OpenPauseMenu()
 {
-	if (ActiveWidget || !GetWorld())
+	if (!ActiveWidget && GetWorld())
 	{
-		return;
-	}
-
-	APlayerController* Controller = ResolvePlayerController();
-	if (!Controller)
-	{
-		UE_LOG(LogPauseMenu, Error, TEXT("[MENU PAUSA] No se encontro el controlador del jugador."));
-		return;
-	}
+		APlayerController* Controller = ResolvePlayerController();
+		if (Controller)
+		{
 
 	if (!SavedSettings)
 	{
 		LoadSettings();
 	}
 
-	ActiveWidget = CreateWidget<UPauseMenuWidget>(
+			ActiveWidget = CreateWidget<UPauseMenuWidget>(
 		Controller,
 		UPauseMenuWidget::StaticClass());
-	if (!ActiveWidget)
-	{
-		UE_LOG(LogPauseMenu, Error, TEXT("[MENU PAUSA] No se pudo crear la interfaz."));
-		return;
-	}
+			if (ActiveWidget)
+			{
 
 	UGameUserSettings* UserSettings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
 	const FIntPoint Resolution = UserSettings
@@ -102,7 +93,18 @@ void UPauseMenuComponent::OpenPauseMenu()
 	InputMode.SetHideCursorDuringCapture(false);
 	Controller->SetInputMode(InputMode);
 
-	UE_LOG(LogPauseMenu, Display, TEXT("[MENU PAUSA] Partida pausada; menu abierto con Escape."));
+				UE_LOG(LogPauseMenu, Display, TEXT("[MENU PAUSA] Partida pausada; menu abierto con Escape."));
+			}
+			else
+			{
+				UE_LOG(LogPauseMenu, Error, TEXT("[MENU PAUSA] No se pudo crear la interfaz."));
+			}
+		}
+		else
+		{
+			UE_LOG(LogPauseMenu, Error, TEXT("[MENU PAUSA] No se encontro el controlador del jugador."));
+		}
+	}
 }
 
 void UPauseMenuComponent::ClosePauseMenu()
@@ -284,15 +286,16 @@ void UPauseMenuComponent::ApplyMasterVolume(const float Volume) const
 
 APlayerController* UPauseMenuComponent::ResolvePlayerController() const
 {
+	APlayerController* Controller = nullptr;
 	if (const APawn* OwnerPawn = Cast<APawn>(GetOwner()))
 	{
-		if (APlayerController* Controller = Cast<APlayerController>(
-			OwnerPawn->GetController()))
-		{
-			return Controller;
-		}
+		Controller = Cast<APlayerController>(OwnerPawn->GetController());
 	}
-	return GetWorld() ? UGameplayStatics::GetPlayerController(GetWorld(), 0) : nullptr;
+	if (!Controller && GetWorld())
+	{
+		Controller = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+	}
+	return Controller;
 }
 
 void UPauseMenuComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)

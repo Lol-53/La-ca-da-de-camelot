@@ -178,24 +178,13 @@ AEnemyResourcePickup* AEnemyResourcePickup::SpawnRandomDrop(
 	AActor* DefeatedEnemy,
 	const float DropChance)
 {
-	if (!IsValid(DefeatedEnemy) || !DefeatedEnemy->GetWorld())
+	AEnemyResourcePickup* Pickup = nullptr;
+	if (IsValid(DefeatedEnemy) && DefeatedEnemy->GetWorld())
 	{
-		return nullptr;
-	}
-
-	const float ClampedChance = FMath::Clamp(DropChance, 0.0f, 1.0f);
-	const float Roll = FMath::FRand();
-	if (Roll >= ClampedChance)
-	{
-		UE_LOG(
-			LogEnemyCollectibles,
-			Display,
-			TEXT("[DROP] %s no genero objeto (tirada %.3f, probabilidad %.0f%%)."),
-			*DefeatedEnemy->GetName(),
-			Roll,
-			ClampedChance * 100.0f);
-		return nullptr;
-	}
+		const float ClampedChance = FMath::Clamp(DropChance, 0.0f, 1.0f);
+		const float Roll = FMath::FRand();
+		if (Roll < ClampedChance)
+		{
 
 	const EEnemyCollectibleType RandomType =
 		static_cast<EEnemyCollectibleType>(FMath::RandRange(0, 3));
@@ -203,47 +192,63 @@ AEnemyResourcePickup* AEnemyResourcePickup::SpawnRandomDrop(
 	SpawnTransform.SetScale3D(FVector::OneVector);
 	SpawnTransform.AddToTranslation(FVector(0.0f, 0.0f, 20.0f));
 
-	AEnemyResourcePickup* Pickup =
+			Pickup =
 		DefeatedEnemy->GetWorld()->SpawnActorDeferred<AEnemyResourcePickup>(
 			StaticClass(),
 			SpawnTransform,
 			DefeatedEnemy,
 			DefeatedEnemy->GetInstigator(),
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-	if (!Pickup)
-	{
-		return nullptr;
-	}
-
-	Pickup->InitializeCollectible(RandomType);
-	UGameplayStatics::FinishSpawningActor(Pickup, SpawnTransform);
-	UE_LOG(
+			if (Pickup)
+			{
+				Pickup->InitializeCollectible(RandomType);
+				UGameplayStatics::FinishSpawningActor(Pickup, SpawnTransform);
+				UE_LOG(
 		LogEnemyCollectibles,
 		Display,
 		TEXT("[DROP] %s genero %s (tirada %.3f, probabilidad %.0f%%)."),
 		*DefeatedEnemy->GetName(),
 		TypeToString(RandomType),
 		Roll,
-		ClampedChance * 100.0f);
+					ClampedChance * 100.0f);
+			}
+		}
+		else
+		{
+			UE_LOG(
+				LogEnemyCollectibles,
+				Display,
+				TEXT("[DROP] %s no genero objeto (tirada %.3f, probabilidad %.0f%%)."),
+				*DefeatedEnemy->GetName(),
+				Roll,
+				ClampedChance * 100.0f);
+		}
+	}
 	return Pickup;
 }
 
 const TCHAR* AEnemyResourcePickup::TypeToString(
 	const EEnemyCollectibleType Type)
 {
+	const TCHAR* TypeName = TEXT("DESCONOCIDO");
 	switch (Type)
 	{
 	case EEnemyCollectibleType::Luz:
-		return TEXT("LUZ");
+		TypeName = TEXT("LUZ");
+		break;
 	case EEnemyCollectibleType::Vida:
-		return TEXT("VIDA");
+		TypeName = TEXT("VIDA");
+		break;
 	case EEnemyCollectibleType::Energia:
-		return TEXT("ENERGIA");
+		TypeName = TEXT("ENERGIA");
+		break;
 	case EEnemyCollectibleType::Mana:
-		return TEXT("MANA");
+		TypeName = TEXT("MANA");
+		break;
 	default:
-		return TEXT("DESCONOCIDO");
+		break;
 	}
+	return TypeName;
 }
 
 void AEnemyResourcePickup::OnCollectionOverlap(
@@ -365,19 +370,25 @@ void AEnemyResourcePickup::ConfigureVisuals()
 
 FLinearColor AEnemyResourcePickup::GetTypeColor() const
 {
+	FLinearColor TypeColor = FLinearColor::White;
 	switch (CollectibleType)
 	{
 	case EEnemyCollectibleType::Luz:
-		return FLinearColor(1.0f, 0.78f, 0.08f, 1.0f);
+		TypeColor = FLinearColor(1.0f, 0.78f, 0.08f, 1.0f);
+		break;
 	case EEnemyCollectibleType::Vida:
-		return FLinearColor(1.0f, 0.025f, 0.035f, 1.0f);
+		TypeColor = FLinearColor(1.0f, 0.025f, 0.035f, 1.0f);
+		break;
 	case EEnemyCollectibleType::Energia:
-		return FLinearColor(0.04f, 1.0f, 0.18f, 1.0f);
+		TypeColor = FLinearColor(0.04f, 1.0f, 0.18f, 1.0f);
+		break;
 	case EEnemyCollectibleType::Mana:
-		return FLinearColor(0.12f, 0.28f, 1.0f, 1.0f);
+		TypeColor = FLinearColor(0.12f, 0.28f, 1.0f, 1.0f);
+		break;
 	default:
-		return FLinearColor::White;
+		break;
 	}
+	return TypeColor;
 }
 
 void AEnemyResourcePickup::SnapToGround()
@@ -430,20 +441,14 @@ void AEnemyResourcePickup::SnapToGround()
 
 void AEnemyResourcePickup::FaceLabelToCamera() const
 {
-	if (!TypeLabel)
+	const APlayerCameraManager* CameraManager = TypeLabel
+		? UGameplayStatics::GetPlayerCameraManager(this, 0)
+		: nullptr;
+	if (CameraManager)
 	{
-		return;
+		FRotator LookRotation =
+			(CameraManager->GetCameraLocation() - TypeLabel->GetComponentLocation()).Rotation();
+		LookRotation.Roll = 0.0f;
+		TypeLabel->SetWorldRotation(LookRotation);
 	}
-
-	const APlayerCameraManager* CameraManager =
-		UGameplayStatics::GetPlayerCameraManager(this, 0);
-	if (!CameraManager)
-	{
-		return;
-	}
-
-	FRotator LookRotation =
-		(CameraManager->GetCameraLocation() - TypeLabel->GetComponentLocation()).Rotation();
-	LookRotation.Roll = 0.0f;
-	TypeLabel->SetWorldRotation(LookRotation);
 }

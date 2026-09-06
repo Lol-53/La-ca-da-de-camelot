@@ -125,32 +125,31 @@ void URunStatusWidget::BuildInterface()
 void URunStatusWidget::RefreshPowerList(
 	const TArray<FString>& ActivePowerNames)
 {
-	if (!PowerList || !WidgetTree)
+	if (PowerList && WidgetTree)
 	{
-		return;
-	}
-
-	PowerList->ClearChildren();
-	if (ActivePowerNames.IsEmpty())
-	{
-		UTextBlock* EmptyText = RunStatusUI::CreateText(
+		PowerList->ClearChildren();
+		if (ActivePowerNames.IsEmpty())
+		{
+			UTextBlock* EmptyText = RunStatusUI::CreateText(
 			WidgetTree, TEXT("NoActivePowers"), TEXT("Todavia no tienes poderes temporales."),
 			18, FLinearColor(0.68f, 0.72f, 0.78f, 1.0f), ETextJustify::Center);
-		PowerList->AddChildToVerticalBox(EmptyText);
-		return;
-	}
-
-	for (int32 Index = 0; Index < ActivePowerNames.Num(); ++Index)
-	{
-		UTextBlock* PowerText = RunStatusUI::CreateText(
+			PowerList->AddChildToVerticalBox(EmptyText);
+		}
+		else
+		{
+			for (int32 Index = 0; Index < ActivePowerNames.Num(); ++Index)
+			{
+				UTextBlock* PowerText = RunStatusUI::CreateText(
 			WidgetTree,
 			*FString::Printf(TEXT("ActivePower_%d"), Index),
 			FString::Printf(TEXT("• %s"), *ActivePowerNames[Index]),
 			18,
 			FLinearColor::White);
-		if (UVerticalBoxSlot* PowerSlot = PowerList->AddChildToVerticalBox(PowerText))
-		{
-			PowerSlot->SetPadding(FMargin(8.0f, 4.0f));
+				if (UVerticalBoxSlot* PowerSlot = PowerList->AddChildToVerticalBox(PowerText))
+				{
+					PowerSlot->SetPadding(FMargin(8.0f, 4.0f));
+				}
+			}
 		}
 	}
 }
